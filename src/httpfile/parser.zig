@@ -13,10 +13,9 @@ pub const HttpMethod = enum {
     OPTIONS,
     TRACE,
     CONNECT,
-    UNKNOWN,
 
-    pub fn fromString(method_str: []const u8) HttpMethod {
-        return std.meta.stringToEnum(HttpMethod, method_str) orelse .UNKNOWN;
+    pub fn fromString(method_str: []const u8) ?HttpMethod {
+        return std.meta.stringToEnum(HttpMethod, method_str) orelse null;
     }
 };
 
@@ -26,32 +25,30 @@ pub const Header = struct {
 };
 
 pub const HttpRequest = struct {
-    method: HttpMethod,
+    method: ?HttpMethod,
     url: []const u8,
     headers: ArrayList(Header),
     body: ?[]const u8,
-    allocator: Allocator,
 
     pub fn init(allocator: Allocator) HttpRequest {
         return .{
-            .method = .UNKNOWN,
+            .method = null,
             .url = "",
             .headers = ArrayList(Header).init(allocator),
             .body = null,
-            .allocator = allocator,
         };
     }
 
-    pub fn deinit(self: *HttpRequest) void {
-        self.allocator.free(self.url);
+    pub fn deinit(self: *HttpRequest, allocator: std.mem.Allocator) void {
+        allocator.free(self.url);
 
         for (self.headers.items) |header| {
-            self.allocator.free(header.name);
-            self.allocator.free(header.value);
+            allocator.free(header.name);
+            allocator.free(header.value);
         }
 
         if (self.body) |body| {
-            self.allocator.free(body);
+            allocator.free(body);
         }
         self.headers.deinit();
     }
@@ -71,14 +68,14 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
     var requests = ArrayList(HttpRequest).init(allocator);
     errdefer {
         for (requests.items) |*request| {
-            request.deinit();
+            request.deinit(allocator);
         }
 
         requests.deinit();
     }
 
     var current_request = HttpRequest.init(allocator);
-    errdefer current_request.deinit();
+    errdefer current_request.deinit(allocator);
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     var line_index: usize = 0;
@@ -100,8 +97,7 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
         }
 
         if (std.mem.startsWith(u8, trimmed_line, "###")) {
-            if (current_request.method != .UNKNOWN) {
-
+            if (current_request.method != null) {
                 // if we're in the body, dupe it and clear it
                 if (in_body and body_buffer.items.len > 0) {
                     current_request.body = try allocator.dupe(u8, body_buffer.items);
@@ -120,7 +116,7 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
             continue;
         }
 
-        if (!in_headers and !in_body and current_request.method == .UNKNOWN) {
+        if (!in_headers and !in_body and current_request.method == null) {
             var tokens = std.mem.tokenizeScalar(u8, trimmed_line, ' ');
             const method_str = tokens.next() orelse return error.InvalidRequestMissingMethod;
             const url = tokens.next() orelse return error.InvalidRequestMissingURL;
@@ -151,7 +147,7 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
         }
     }
 
-    if (current_request.method != .UNKNOWN) {
+    if (current_request.method != null) {
         if (in_body and body_buffer.items.len > 0) {
             current_request.body = try allocator.dupe(u8, body_buffer.items);
         }
@@ -183,7 +179,7 @@ test "HttpParser from String Contents" {
     var requests = try parseContent(std.testing.allocator, test_http_contents);
     defer {
         for (requests.items) |*request| {
-            request.deinit();
+            request.deinit(std.testing.allocator);
         }
         requests.deinit();
     }
