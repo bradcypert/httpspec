@@ -1,23 +1,8 @@
 const std = @import("std");
+const http = std.http;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
-
-pub const HttpMethod = enum {
-    GET,
-    POST,
-    PUT,
-    DELETE,
-    PATCH,
-    HEAD,
-    OPTIONS,
-    TRACE,
-    CONNECT,
-
-    pub fn fromString(method_str: []const u8) ?HttpMethod {
-        return std.meta.stringToEnum(HttpMethod, method_str) orelse null;
-    }
-};
 
 const ParserState = enum { headers, body };
 
@@ -27,7 +12,7 @@ pub const Header = struct {
 };
 
 pub const HttpRequest = struct {
-    method: ?HttpMethod,
+    method: ?http.Method,
     url: []const u8,
     headers: ArrayList(Header),
     body: ?[]const u8,
@@ -120,7 +105,7 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
             const method_str = tokens.next() orelse return error.InvalidRequestMissingMethod;
             const url = tokens.next() orelse return error.InvalidRequestMissingURL;
 
-            current_request.method = HttpMethod.fromString(method_str);
+            current_request.method = std.meta.stringToEnum(http.Method, method_str) orelse null;
             current_request.url = try allocator.dupe(u8, url);
             state = .headers;
             continue;
@@ -183,8 +168,8 @@ test "HttpParser from String Contents" {
         requests.deinit();
     }
 
-    try std.testing.expectEqual(HttpMethod.GET, requests.items[0].method);
-    try std.testing.expectEqual(HttpMethod.POST, requests.items[1].method);
+    try std.testing.expectEqual(http.Method.GET, requests.items[0].method);
+    try std.testing.expectEqual(http.Method.POST, requests.items[1].method);
     try std.testing.expectEqualStrings("https://api.example.com", requests.items[0].url);
     try std.testing.expectEqualStrings("https://api.example.com/users", requests.items[1].url);
     try std.testing.expectEqualStrings("Authorization", requests.items[0].headers.items[1].name);
