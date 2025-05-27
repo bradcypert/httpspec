@@ -19,6 +19,8 @@ pub const HttpMethod = enum {
     }
 };
 
+const ParserState = enum { headers, body };
+
 pub const Header = struct {
     name: []const u8,
     value: []const u8,
@@ -76,11 +78,10 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
 
     var current_request = HttpRequest.init(allocator);
     errdefer current_request.deinit(allocator);
+    var state: ?ParserState = null;
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     var line_index: usize = 0;
-    var in_headers = false;
-    var in_body = false;
     var body_buffer = ArrayList(u8).init(allocator);
     defer body_buffer.deinit();
 
@@ -89,9 +90,8 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
         const trimmed_line = std.mem.trim(u8, line, &std.ascii.whitespace);
 
         if (trimmed_line.len == 0) {
-            if (in_headers) {
-                in_headers = false;
-                in_body = true;
+            if (state == .headers) {
+                state = .body;
             }
             continue;
         }
@@ -99,15 +99,14 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
         if (std.mem.startsWith(u8, trimmed_line, "###")) {
             if (current_request.method != null) {
                 // if we're in the body, dupe it and clear it
-                if (in_body and body_buffer.items.len > 0) {
+                if (state == .body and body_buffer.items.len > 0) {
                     current_request.body = try allocator.dupe(u8, body_buffer.items);
                     body_buffer.clearRetainingCapacity();
                 }
 
                 try requests.append(current_request);
                 current_request = HttpRequest.init(allocator);
-                in_body = false;
-                in_headers = false;
+                state = null;
             }
             continue;
         }
@@ -116,18 +115,18 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
             continue;
         }
 
-        if (!in_headers and !in_body and current_request.method == null) {
+        if (state == null and current_request.method == null) {
             var tokens = std.mem.tokenizeScalar(u8, trimmed_line, ' ');
             const method_str = tokens.next() orelse return error.InvalidRequestMissingMethod;
             const url = tokens.next() orelse return error.InvalidRequestMissingURL;
 
             current_request.method = HttpMethod.fromString(method_str);
             current_request.url = try allocator.dupe(u8, url);
-            in_headers = true;
+            state = .headers;
             continue;
         }
 
-        if (in_headers) {
+        if (state == .headers) {
             if (std.mem.indexOf(u8, trimmed_line, ":")) |colon_pos| {
                 const header_name = std.mem.trim(u8, trimmed_line[0..colon_pos], &std.ascii.whitespace);
                 const header_value = std.mem.trim(u8, trimmed_line[colon_pos + 1 ..], &std.ascii.whitespace);
@@ -141,14 +140,14 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
             }
         }
 
-        if (in_body) {
+        if (state == .body) {
             try body_buffer.appendSlice(trimmed_line);
             try body_buffer.append('\n');
         }
     }
 
     if (current_request.method != null) {
-        if (in_body and body_buffer.items.len > 0) {
+        if (state == .body and body_buffer.items.len > 0) {
             current_request.body = try allocator.dupe(u8, body_buffer.items);
         }
 
