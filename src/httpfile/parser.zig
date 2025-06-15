@@ -6,22 +6,17 @@ const ArrayList = std.ArrayList;
 
 const ParserState = enum { headers, body };
 
-pub const Header = struct {
-    name: []const u8,
-    value: []const u8,
-};
-
 pub const HttpRequest = struct {
     method: ?http.Method,
     url: []const u8,
-    headers: ArrayList(Header),
+    headers: ArrayList(http.Header),
     body: ?[]const u8,
 
     pub fn init(allocator: Allocator) HttpRequest {
         return .{
             .method = null,
             .url = "",
-            .headers = ArrayList(Header).init(allocator),
+            .headers = ArrayList(http.Header).init(allocator),
             .body = null,
         };
     }
@@ -37,6 +32,7 @@ pub const HttpRequest = struct {
         if (self.body) |body| {
             allocator.free(body);
         }
+
         self.headers.deinit();
     }
 };
@@ -48,7 +44,7 @@ pub fn parseFile(allocator: std.mem.Allocator, file_path: []const u8) !ArrayList
     const file_content = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(file_content);
 
-    return try parseContent(file_content);
+    return try parseContent(allocator, file_content);
 }
 
 pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayList(HttpRequest) {
@@ -116,7 +112,7 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
                 const header_name = std.mem.trim(u8, trimmed_line[0..colon_pos], &std.ascii.whitespace);
                 const header_value = std.mem.trim(u8, trimmed_line[colon_pos + 1 ..], &std.ascii.whitespace);
 
-                try current_request.headers.append(Header{
+                try current_request.headers.append(http.Header{
                     .name = try allocator.dupe(u8, header_name),
                     .value = try allocator.dupe(u8, header_value),
                 });
