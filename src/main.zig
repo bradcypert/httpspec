@@ -36,7 +36,6 @@ pub fn main() !void {
     // threads.
     // var request_files = std.ArrayList([]HttpParser.HttpRequest).init(allocator);
     for (res.positionals[0]) |pos| {
-        std.debug.print("{s}\n", .{pos});
         // TODO: Each one gets its own areana?
         var items = try HttpParser.parseFile(allocator, pos);
         const owned_items = try items.toOwnedSlice();
