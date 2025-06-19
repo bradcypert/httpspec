@@ -6,24 +6,25 @@ const Uri = std.Uri;
 const httpfiles = @import("./parser.zig");
 
 pub const HttpResponse = struct {
-    status_code: ?http.Status,
-    headers: ArrayList(http.Header),
+    status: ?http.Status,
+    headers: std.StringHashMap([]const u8),
     body: []u8,
     allocator: Allocator,
 
     pub fn init(allocator: Allocator) HttpResponse {
         return .{
-            .status_code = null,
-            .headers = ArrayList(http.Header).init(allocator),
+            .status = null,
+            .headers = std.StringHashMap([]const u8).init(allocator),
             .body = &[_]u8{},
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *HttpResponse) void {
-        for (self.headers.items) |header| {
-            self.allocator.free(header.name);
-            self.allocator.free(header.value);
+        var headers = self.headers.iterator();
+        while (headers.next()) |header| {
+            self.allocator.free(header.value_ptr.*);
+            self.allocator.free(header.key_ptr.*);
         }
         self.headers.deinit();
         if (self.body.len > 0) {
@@ -53,7 +54,6 @@ pub const HttpClient = struct {
         }
 
         // Parse the URL
-        std.debug.print("{s}", .{request.url});
         const uri = try Uri.parse(request.url);
 
         var server_header_buf: [4096]u8 = undefined;
@@ -87,14 +87,14 @@ pub const HttpClient = struct {
 
         // Read the response
         var response = HttpResponse.init(self.allocator);
-        response.status_code = req.response.status;
+        response.status = req.response.status;
 
         // Copy response headers
         var header_iterator = req.response.iterateHeaders();
         while (header_iterator.next()) |header| {
             const name = try self.allocator.dupe(u8, header.name);
             const value = try self.allocator.dupe(u8, header.value);
-            try response.headers.append(.{ .name = name, .value = value });
+            try response.headers.put(name, value);
         }
 
         // Read response body
@@ -125,7 +125,7 @@ pub const HttpClient = struct {
 
 // Utility function to print response details
 pub fn printResponse(response: *const HttpResponse) void {
-    std.debug.print("Status: {d}\n", .{response.status_code});
+    std.debug.print("Status: {d}\n", .{response.status});
     std.debug.print("Headers:\n");
     for (response.headers.items) |header| {
         std.debug.print("  {s}: {s}\n", .{ header.name, header.value });
@@ -156,5 +156,5 @@ test "HttpClient basic functionality" {
     defer response.deinit();
 
     // Check that we got a 200 status
-    try std.testing.expectEqual(http.Status.ok, response.status_code);
+    try std.testing.expectEqual(http.Status.ok, response.status.?);
 }

@@ -15,15 +15,25 @@ const AssertionType = enum {
     ends_with,
     // matches_regex, TODO: Soon.
     // not_matches_regex,
+
+    pub fn fromString(s: []const u8) ?AssertionType {
+        if (std.ascii.eqlIgnoreCase(s, "==")) return .equal;
+        if (std.ascii.eqlIgnoreCase(s, "equal")) return .equal;
+        if (std.ascii.eqlIgnoreCase(s, "!=")) return .not_equal;
+        if (std.ascii.eqlIgnoreCase(s, "contains")) return .contains;
+        if (std.ascii.eqlIgnoreCase(s, "not_contains")) return .not_contains;
+        if (std.ascii.eqlIgnoreCase(s, "starts_with")) return .starts_with;
+        if (std.ascii.eqlIgnoreCase(s, "ends_with")) return .ends_with;
+        // if (std.ascii.eqlIgnoreCase(s, "matches_regex")) return .matches_regex;
+        // if (std.ascii.eqlIgnoreCase(s, "not_matches_regex")) return .not_matches_regex;
+        return null;
+    }
 };
 
-const Assertion = struct {
+pub const Assertion = struct {
     key: []const u8,
     value: []const u8,
-    // TODO: This shouldn't be nullable.
-    // We can change the way this value is parsed so that
-    // null is not a valid option.
-    assertion_type: ?AssertionType,
+    assertion_type: AssertionType,
 };
 
 pub const HttpRequest = struct {
@@ -32,6 +42,7 @@ pub const HttpRequest = struct {
     headers: ArrayList(http.Header),
     body: ?[]const u8,
     assertions: ArrayList(Assertion),
+    // TODO: Need to add a name for the request since that can be specified in the http file. This should also be used when running assertions.
 
     pub fn init(allocator: Allocator) HttpRequest {
         return .{
@@ -121,35 +132,42 @@ pub fn parseContent(allocator: std.mem.Allocator, content: []const u8) !ArrayLis
 
         if (std.mem.startsWith(u8, trimmed_line, "//#")) {
             // These are assertions.
-            var assertion_tokens = std.mem.tokenizeScalar(u8, trimmed_line[3..], ' ');
-            var assertion = Assertion{
-                .key = "",
-                .value = "",
-                .assertion_type = null,
-            };
+            var assertion_tokens = std.mem.tokenizeScalar(u8, std.mem.trim(u8, trimmed_line[3..], " "), ' ');
+            var key: []const u8 = "";
+            var value: []const u8 = "";
+            var assertion_type: ?AssertionType = null;
             if (assertion_tokens.next()) |first_token| {
                 // The first token is the assertion type.
-                assertion.key = first_token;
+                key = first_token;
             } else {
                 return error.InvalidAssertionFormat;
             }
             if (assertion_tokens.next()) |second_token| {
                 // The first token is the assertion type.
-                assertion.assertion_type = std.meta.stringToEnum(AssertionType, second_token) orelse null;
+                assertion_type = AssertionType.fromString(second_token);
             } else {
                 return error.InvalidAssertionFormat;
             }
             if (assertion_tokens.next()) |third_token| {
                 // The first token is the assertion type.
-                assertion.value = third_token;
+                value = third_token;
             } else {
                 return error.InvalidAssertionFormat;
             }
-            if (assertion.key.len == 0 or assertion.value.len == 0 or assertion.assertion_type == null) {
+            if (assertion_type) |assertion_type_val| {
+                const assertion = Assertion{
+                    .key = try allocator.dupe(u8, key),
+                    .value = try allocator.dupe(u8, value),
+                    .assertion_type = assertion_type_val,
+                };
+                if (assertion.key.len == 0 or assertion.value.len == 0) {
+                    return error.InvalidAssertionFormat;
+                }
+                try current_request.assertions.append(assertion);
+                continue;
+            } else {
                 return error.InvalidAssertionFormat;
             }
-            try current_request.assertions.append(assertion);
-            continue;
         }
 
         if (std.mem.startsWith(u8, trimmed_line, "#") or std.mem.startsWith(u8, trimmed_line, "//")) {
@@ -242,7 +260,7 @@ test "HttpParser parses assertions" {
         \\Accept: */*
         \\Authorization: Bearer ABC123
         \\
-        \\//# status_code equal 200
+        \\//# status equal 200
     ;
 
     var requests = try parseContent(std.testing.allocator, test_http_contents);
@@ -255,9 +273,8 @@ test "HttpParser parses assertions" {
 
     try std.testing.expectEqual(http.Method.GET, requests.items[0].method);
     try std.testing.expectEqualStrings("https://api.example.com", requests.items[0].url);
-    try std.testing.expectEqualStrings("status", requests.items[0].assertions.items[0].assertions[0].key);
-    try std.testing.expectEqual(AssertionType.equal, requests.items[0].assertions.items[0].assertions[0].assertion_type);
-    try std.testing.expectEqualStrings("200", requests.items[0].assertions.items[0].assertions[0].value);
+    try std.testing.expectEqualStrings("status", requests.items[0].assertions.items[0].key);
+    try std.testing.expectEqual(AssertionType.equal, requests.items[0].assertions.items[0].assertion_type);
+    try std.testing.expectEqualStrings("200", requests.items[0].assertions.items[0].value);
     try std.testing.expectEqual(0, (requests.items[0].body orelse "").len);
-    try std.testing.expect(0 != (requests.items[1].body orelse "").len);
 }

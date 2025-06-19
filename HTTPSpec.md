@@ -70,13 +70,11 @@ Assertions are specified in the final block of a request, and begin with `//#`.
 ```
 GET https://api.example.com/users/123
 
-> assert
-status == 200
-header["Content-Type"] == "application/json"
-body.id == 123
-body.name == "John Doe"
-body.email contains "@example.com"
-> endassert
+//# status == 200
+//# header["Content-Type"] == "application/json"
+//# body.id == 123
+//# body.name == "John Doe"
+//# body.email contains "@example.com"
 ```
 
 ### 4.2 JSON Path

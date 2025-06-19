@@ -2,3 +2,7 @@
 GET http://httpbin.org/status/200
 Content-Type: application/json
 
+### Make a simple 404 request to HTTP Bin
+GET http://httpbin.org/status/404
+Content-Type: application/json
+//# status == 403
