@@ -34,7 +34,7 @@ Running test 1: ./test_files/httpbin_test.http
 [Fail] Expected status code 403, got 404
 All 1 tests ran successfully!
 
-Pass: 1
+Pass: 0
 Fail: 1
 ```
 
