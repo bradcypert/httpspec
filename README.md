@@ -24,6 +24,20 @@ Httpspec takes this file, executes the first request (/status/200 in this case),
 
 The idea behind Httpspec is to allow you to specify a series of HTTP requests (with assertions) to model a sequence of test steps. For example, the first request in your file may create a user in your API which is then needed by future requests. You may then make another request, using those user credentials, to create an order for that user -- again, this is just an example.
 
+# How to Use
+
+```bash
+httpspec ./test_files/httpbin_test.http # or whatever your filepath is to your .http or .httpspec file
+
+# Sample output
+Running test 1: ./test_files/httpbin_test.http
+[Fail] Expected status code 403, got 404
+All 1 tests ran successfully!
+
+Pass: 1
+Fail: 1
+```
+
 There are some gaps in this implementation at this point (these are things I plan to address):
 
 1. There is not currently a way to pipe the response from a previous request into the next request. This is limiting as you often may need an ID from a previous request to make the next request.
