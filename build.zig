@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const exe_name = b.option([]const u8, "exe_name", "Name of the executable") orelse "httpspec";
     const dependencies = [_][]const u8{
         "clap",
     };
@@ -15,7 +16,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const exe = b.addExecutable(.{
-        .name = "httpspec",
+        .name = exe_name,
         .root_module = exe_mod,
     });
 
