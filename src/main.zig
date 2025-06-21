@@ -30,13 +30,47 @@ pub fn main() !void {
         std.debug.print("--help\n", .{});
     }
 
+    var files = std.ArrayList([]const u8).init(allocator);
+    defer {
+        for (files.items) |file| {
+            allocator.free(file);
+        }
+        files.deinit();
+    }
+
+    if (res.positionals[0].len == 0) {
+        // If no positional arguments are provided, we assume we want to run all HTTP files in the current directory and subdirectories
+        const http_files = try listHttpFiles(allocator, ".");
+        defer allocator.free(http_files);
+        for (http_files) |file| {
+            try files.append(file);
+        }
+    }
+
+    for (res.positionals[0]) |pos| {
+        if (std.ascii.eqlIgnoreCase(std.fs.path.extension(pos), ".http") or std.ascii.eqlIgnoreCase(std.fs.path.extension(pos), ".httpspec")) {
+            // If a positional argument is provided, we assume it's a file
+            try files.append(pos);
+        } else {
+            // if its NOT a directory we return an error
+            const file_info = try std.fs.cwd().statFile(pos);
+            if (file_info.kind != .directory) {
+                return error.InvalidPositionalArgument;
+            }
+            // If it's a directory, we list all HTTP files in it
+            const http_files = try listHttpFiles(allocator, pos);
+            defer allocator.free(http_files);
+            for (http_files) |file| {
+                try files.append(file);
+            }
+        }
+    }
+
     var test_count: usize = 0;
     var test_pass: usize = 0;
     var test_fail: usize = 0;
     // TODO: This is simple, but completely serial. Ideally, we'd span this across multiple threads.
-    // TODO: Need to make this handle directories as well.
-    // TODO: Need to make this handle no positional inputs (i.e., run all files in subdirectories).
-    for (res.positionals[0]) |pos| {
+    for (files.items) |pos| {
         test_count += 1;
         var has_failure = false;
         // TODO: Each one gets its own areana?
@@ -77,4 +111,36 @@ pub fn main() !void {
         std.debug.print("Error writing to stdout: {}\n", .{err});
         return err;
     };
+}
+
+// List all HTTP files in the given directory and its subdirectories
+// This function returns a slice of file paths that end with .http or .httpspec
+fn listHttpFiles(allocator: std.mem.Allocator, dir: []const u8) ![][]const u8 {
+    var files = std.ArrayList([]const u8).init(allocator);
+    defer files.deinit();
+
+    var dir_entry = try std.fs.cwd().openDir(dir, .{});
+    defer dir_entry.close();
+
+    var it = dir_entry.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind == .directory) {
+            const paths = &[_][]const u8{ dir, entry.name };
+            const subdir = std.fs.path.join(allocator, paths) catch return error.OutOfMemory;
+            defer allocator.free(subdir);
+            const sub_files = try listHttpFiles(allocator, subdir);
+            defer allocator.free(sub_files);
+            for (sub_files) |file| {
+                try files.append(file);
+            }
+        } else if (std.mem.eql(u8, std.fs.path.extension(entry.name), ".http") or
+            std.mem.eql(u8, std.fs.path.extension(entry.name), ".httpspec"))
+        {
+            const paths = &[_][]const u8{ dir, entry.name };
+            const file_path = std.fs.path.join(allocator, paths) catch return error.OutOfMemory;
+            try files.append(file_path);
+        }
+    }
+
+    return files.toOwnedSlice();
 }
