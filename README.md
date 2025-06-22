@@ -41,5 +41,13 @@ Fail: 1
 There are some gaps in this implementation at this point (these are things I plan to address):
 
 1. There is not currently a way to pipe the response from a previous request into the next request. This is limiting as you often may need an ID from a previous request to make the next request.
-2. Currently, everything runs serially. The plan is to run each file in isolation against a thread pool. This will happen eventually, so if you start writing tests today, write them with this in mind (dont try to get fancy with sequencing of test files).
-3. Not all of the assertion types specified in the [specification](./HTTPSpec.md) are implemented yet.
+2. Not all of the assertion types specified in the [specification](./HTTPSpec.md) are implemented yet.
+
+# Configuration
+
+Do you have the need for speed? Tests are ran against a thread-pool and you can configure the number of jobs in said pool! Use the `HTTP_THREAD_COUNT` env var to specify the number of jobs in the pool.
+
+Example:
+```bash
+HTTP_THREAD_COUNT=4 httpspec ./my_project/httptests/
+```
