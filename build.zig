@@ -44,6 +44,41 @@ pub fn build(b: *std.Build) void {
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
+    // Automatically find all Zig files in src/ and subdirectories and add test steps for each
+    var zig_files = std.ArrayList([]const u8).init(b.allocator);
+    defer zig_files.deinit();
+    findZigFiles(b, &zig_files, "src") catch unreachable;
+
+    var test_run_steps = std.ArrayList(*std.Build.Step).init(b.allocator);
+    defer test_run_steps.deinit();
+
+    for (zig_files.items) |zig_file| {
+        // Skip main.zig since it's already covered by exe_unit_tests
+        if (std.mem.endsWith(u8, zig_file, "/main.zig")) continue;
+        const test_artifact = b.addTest(.{ .root_source_file = b.path(zig_file), .target = target, .optimize = optimize });
+        const run_test = b.addRunArtifact(test_artifact);
+        test_run_steps.append(&run_test.step) catch unreachable;
+    }
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+    for (test_run_steps.items) |step| {
+        test_step.dependOn(step);
+    }
+}
+
+fn findZigFiles(b: *std.Build, files: *std.ArrayList([]const u8), dir_path: []const u8) !void {
+    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
+    defer dir.close();
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
+            const full_path = try std.fs.path.join(b.allocator, &[_][]const u8{ dir_path, entry.name });
+            try files.append(full_path);
+        } else if (entry.kind == .directory and !std.mem.eql(u8, entry.name, ".") and !std.mem.eql(u8, entry.name, "..")) {
+            const subdir = try std.fs.path.join(b.allocator, &[_][]const u8{ dir_path, entry.name });
+            defer b.allocator.free(subdir);
+            try findZigFiles(b, files, subdir);
+        }
+    }
 }

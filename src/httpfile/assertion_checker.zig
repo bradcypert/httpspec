@@ -22,7 +22,6 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                 } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
                     // Extract the header name from the assertion key
                     const header_name = assertion.key[8 .. assertion.key.len - 2];
-
                     const actual_value = response.headers.get(header_name);
                     if (actual_value == null or !std.ascii.eqlIgnoreCase(actual_value.?, assertion.value)) {
                         stderr.print("[Fail] Expected header \"{s}\" to be \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch return error.HeaderMismatch;
@@ -33,6 +32,32 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                     return error.InvalidAssertionKey;
                 }
             },
+            .not_equal => {
+                if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
+                    const assert_status_code = try std.fmt.parseInt(u16, assertion.value, 10);
+                    if (response.status == try std.meta.intToEnum(http.Status, assert_status_code)) {
+                        stderr.print("[Fail] Expected status code to NOT equal {d}, got {d}\n", .{ assert_status_code, @intFromEnum(response.status.?) }) catch return error.StatusCodesMatchButShouldnt;
+                        return error.StatusCodesMatchButShouldnt;
+                    }
+                } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
+                    if (std.mem.eql(u8, response.body, assertion.value)) {
+                        stderr.print("[Fail] Expected body content to NOT equal \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch return error.BodyContentMatchesButShouldnt;
+                        return error.BodyContentMatchesButShouldnt;
+                    }
+                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                    // Extract the header name from the assertion key
+                    const header_name = assertion.key[8 .. assertion.key.len - 2];
+                    const actual_value = response.headers.get(header_name);
+                    if (actual_value != null and std.ascii.eqlIgnoreCase(actual_value.?, assertion.value)) {
+                        stderr.print("[Fail] Expected header \"{s}\" to NOT equal \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch return error.HeaderMatchesButShouldnt;
+                        return error.HeaderMatchesButShouldnt;
+                    }
+                } else {
+                    stderr.print("[Fail] Invalid assertion key: {s}\n", .{assertion.key}) catch return error.InvalidAssertionKey;
+                    return error.InvalidAssertionKey;
+                }
+            },
+
             // .header => {
             //     // assertion.key is header[""] so we need to
             //     // parse it out of the quotes
@@ -101,7 +126,7 @@ test "HttpParser parses assertions" {
         .assertion_type = .equal,
     });
 
-    const request = HttpParser.HttpRequest{
+    var request = HttpParser.HttpRequest{
         .method = .GET,
         .url = "https://api.example.com",
         .headers = std.ArrayList(http.Header).init(allocator),
@@ -122,5 +147,54 @@ test "HttpParser parses assertions" {
         .allocator = allocator,
     };
 
-    try check(request, response);
+    try check(&request, response);
+}
+
+test "HttpParser handles NotEquals" {
+    const allocator = std.testing.allocator;
+
+    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
+    defer assertions.deinit();
+
+    try assertions.append(HttpParser.Assertion{
+        .key = "status",
+        .value = "400",
+        .assertion_type = .not_equal,
+    });
+
+    try assertions.append(HttpParser.Assertion{
+        .key = "body",
+        .value = "Response body content!!!",
+        .assertion_type = .not_equal,
+    });
+
+    // TODO: This should also work with header[\"Content-Type\"] as the key
+    try assertions.append(HttpParser.Assertion{
+        .key = "header[\"content-type\"]",
+        .value = "application/xml",
+        .assertion_type = .not_equal,
+    });
+
+    var request = HttpParser.HttpRequest{
+        .method = .GET,
+        .url = "https://api.example.com",
+        .headers = std.ArrayList(http.Header).init(allocator),
+        .assertions = assertions,
+        .body = null,
+    };
+
+    var response_headers = std.StringHashMap([]const u8).init(allocator);
+    try response_headers.put("content-type", "application/json");
+    defer response_headers.deinit();
+
+    const body = try allocator.dupe(u8, "Response body content");
+    defer allocator.free(body);
+    const response = Client.HttpResponse{
+        .status = http.Status.ok,
+        .headers = response_headers,
+        .body = body,
+        .allocator = allocator,
+    };
+
+    try check(&request, response);
 }
