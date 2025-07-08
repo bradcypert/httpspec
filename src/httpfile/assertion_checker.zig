@@ -1,3 +1,46 @@
+test "HttpParser supports contains and not_contains for headers" {
+    const allocator = std.testing.allocator;
+
+    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
+    defer assertions.deinit();
+
+    // Should pass: header contains "json"
+    try assertions.append(HttpParser.Assertion{
+        .key = "header[\"content-type\"]",
+        .value = "json",
+        .assertion_type = .contains,
+    });
+
+    // Should pass: header does not contain "xml"
+    try assertions.append(HttpParser.Assertion{
+        .key = "header[\"content-type\"]",
+        .value = "xml",
+        .assertion_type = .not_contains,
+    });
+
+    var request = HttpParser.HttpRequest{
+        .method = .GET,
+        .url = "https://api.example.com",
+        .headers = std.ArrayList(http.Header).init(allocator),
+        .assertions = assertions,
+        .body = null,
+    };
+
+    var response_headers = std.StringHashMap([]const u8).init(allocator);
+    try response_headers.put("content-type", "application/json");
+    defer response_headers.deinit();
+
+    const body = try allocator.dupe(u8, "irrelevant");
+    defer allocator.free(body);
+    const response = Client.HttpResponse{
+        .status = http.Status.ok,
+        .headers = response_headers,
+        .body = body,
+        .allocator = allocator,
+    };
+
+    try check(&request, response);
+}
 const std = @import("std");
 const http = std.http;
 const HttpParser = @import("./parser.zig");
@@ -82,8 +125,16 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                     }
                 } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
                     if (std.mem.indexOf(u8, response.body, assertion.value) == null) {
-                        stderr.print("[Fail] Expected body content to NOT contain \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
+                        stderr.print("[Fail] Expected body content to contain \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
                         return error.BodyContentNotContains;
+                    }
+                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                    // Extract the header name from the assertion key
+                    const header_name = assertion.key[8 .. assertion.key.len - 2];
+                    const actual_value = response.headers.get(header_name);
+                    if (actual_value == null or std.mem.indexOf(u8, actual_value.?, assertion.value) == null) {
+                        stderr.print("[Fail] Expected header \"{s}\" to contain \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
+                        return error.HeaderNotContains;
                     }
                 } else {
                     stderr.print("[Fail] Invalid assertion key for contains: {s}\n", .{assertion.key}) catch {};
@@ -100,9 +151,17 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                         return error.StatusCodeContainsButShouldnt;
                     }
                 } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
-                    if (std.mem.indexOf(u8, response.body, assertion.value) == null) {
+                    if (std.mem.indexOf(u8, response.body, assertion.value) != null) {
                         stderr.print("[Fail] Expected body content to NOT contain \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
                         return error.BodyContentContainsButShouldnt;
+                    }
+                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                    // Extract the header name from the assertion key
+                    const header_name = assertion.key[8 .. assertion.key.len - 2];
+                    const actual_value = response.headers.get(header_name);
+                    if (actual_value != null and std.mem.indexOf(u8, actual_value.?, assertion.value) != null) {
+                        stderr.print("[Fail] Expected header \"{s}\" to NOT contain \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
+                        return error.HeaderContainsButShouldnt;
                     }
                 } else {
                     stderr.print("[Fail] Invalid assertion key for contains: {s}\n", .{assertion.key}) catch {};
