@@ -46,6 +46,14 @@ const http = std.http;
 const HttpParser = @import("./parser.zig");
 const Client = @import("./http_client.zig");
 
+fn extractHeaderName(key: []const u8) ![]const u8 {
+    // Expects key in the form header["..."]
+    const start_quote = std.mem.indexOfScalar(u8, key, '"') orelse return error.InvalidAssertionKey;
+    const end_quote = std.mem.lastIndexOfScalar(u8, key, '"') orelse return error.InvalidAssertionKey;
+    if (end_quote <= start_quote) return error.InvalidAssertionKey;
+    return key[start_quote + 1 .. end_quote];
+}
+
 pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !void {
     const stderr = std.io.getStdErr().writer();
     for (request.assertions.items) |assertion| {
@@ -63,8 +71,7 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                         return error.BodyContentMismatch;
                     }
                 } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    // Extract the header name from the assertion key
-                    const header_name = assertion.key[8 .. assertion.key.len - 2];
+                    const header_name = try extractHeaderName(assertion.key);
                     const actual_value = response.headers.get(header_name);
                     if (actual_value == null or !std.ascii.eqlIgnoreCase(actual_value.?, assertion.value)) {
                         stderr.print("[Fail] Expected header \"{s}\" to be \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
@@ -88,8 +95,7 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                         return error.BodyContentMatchesButShouldnt;
                     }
                 } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    // Extract the header name from the assertion key
-                    const header_name = assertion.key[8 .. assertion.key.len - 2];
+                    const header_name = try extractHeaderName(assertion.key);
                     const actual_value = response.headers.get(header_name);
                     if (actual_value != null and std.ascii.eqlIgnoreCase(actual_value.?, assertion.value)) {
                         stderr.print("[Fail] Expected header \"{s}\" to NOT equal \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
@@ -100,20 +106,6 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                     return error.InvalidAssertionKey;
                 }
             },
-
-            // .header => {
-            //     // assertion.key is header[""] so we need to
-            //     // parse it out of the quotes
-            //     const tokens = std.mem.splitScalar(u8, assertion.key, '\"');
-            //     const expected_header = tokens.next() orelse return error.InvalidHeaderFormat;
-            //     if (expected_header.len != 2) {
-            //         return error.InvalidHeaderFormat;
-            //     }
-            //     const actual_value = response.headers.get(expected_header);
-            //     if (actual_value == null or actual_value.* != expected_header.value) {
-            //         return error.HeaderMismatch;
-            //     }
-            // },
             .contains => {
                 if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
                     var status_buf: [3]u8 = undefined;
@@ -129,8 +121,7 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                         return error.BodyContentNotContains;
                     }
                 } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    // Extract the header name from the assertion key
-                    const header_name = assertion.key[8 .. assertion.key.len - 2];
+                    const header_name = try extractHeaderName(assertion.key);
                     const actual_value = response.headers.get(header_name);
                     if (actual_value == null or std.mem.indexOf(u8, actual_value.?, assertion.value) == null) {
                         stderr.print("[Fail] Expected header \"{s}\" to contain \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
@@ -156,8 +147,7 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                         return error.BodyContentContainsButShouldnt;
                     }
                 } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    // Extract the header name from the assertion key
-                    const header_name = assertion.key[8 .. assertion.key.len - 2];
+                    const header_name = try extractHeaderName(assertion.key);
                     const actual_value = response.headers.get(header_name);
                     if (actual_value != null and std.mem.indexOf(u8, actual_value.?, assertion.value) != null) {
                         stderr.print("[Fail] Expected header \"{s}\" to NOT contain \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
@@ -183,7 +173,7 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                         return error.BodyContentNotStartsWith;
                     }
                 } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    const header_name = assertion.key[8 .. assertion.key.len - 2];
+                    const header_name = try extractHeaderName(assertion.key);
                     const actual_value = response.headers.get(header_name);
                     if (actual_value == null or !std.mem.startsWith(u8, actual_value.?, assertion.value)) {
                         stderr.print("[Fail] Expected header \"{s}\" to start with \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
