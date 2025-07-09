@@ -168,6 +168,32 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                     return error.InvalidAssertionKey;
                 }
             },
+            .starts_with => {
+                if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
+                    var status_buf: [3]u8 = undefined;
+                    const status_code = @intFromEnum(response.status.?);
+                    const status_str = std.fmt.bufPrint(&status_buf, "{}", .{status_code}) catch return error.StatusCodeFormat;
+                    if (!std.mem.startsWith(u8, status_str, assertion.value)) {
+                        stderr.print("[Fail] Expected status code to start with \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
+                        return error.StatusCodeNotStartsWith;
+                    }
+                } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
+                    if (!std.mem.startsWith(u8, response.body, assertion.value)) {
+                        stderr.print("[Fail] Expected body content to start with \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
+                        return error.BodyContentNotStartsWith;
+                    }
+                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                    const header_name = assertion.key[8 .. assertion.key.len - 2];
+                    const actual_value = response.headers.get(header_name);
+                    if (actual_value == null or !std.mem.startsWith(u8, actual_value.?, assertion.value)) {
+                        stderr.print("[Fail] Expected header \"{s}\" to start with \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
+                        return error.HeaderNotStartsWith;
+                    }
+                } else {
+                    stderr.print("[Fail] Invalid assertion key for starts_with: {s}\n", .{assertion.key}) catch {};
+                    return error.InvalidAssertionKey;
+                }
+            },
             else => {},
         }
     }
@@ -266,6 +292,54 @@ test "HttpParser handles NotEquals" {
     defer response_headers.deinit();
 
     const body = try allocator.dupe(u8, "Response body content");
+    defer allocator.free(body);
+    const response = Client.HttpResponse{
+        .status = http.Status.ok,
+        .headers = response_headers,
+        .body = body,
+        .allocator = allocator,
+    };
+
+    try check(&request, response);
+}
+
+test "HttpParser supports starts_with for status, body, and header" {
+    const allocator = std.testing.allocator;
+    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
+    defer assertions.deinit();
+
+    // Status starts with "2"
+    try assertions.append(HttpParser.Assertion{
+        .key = "status",
+        .value = "2",
+        .assertion_type = .starts_with,
+    });
+    // Body starts with "Hello"
+    try assertions.append(HttpParser.Assertion{
+        .key = "body",
+        .value = "Hello",
+        .assertion_type = .starts_with,
+    });
+    // Header starts with "application"
+    try assertions.append(HttpParser.Assertion{
+        .key = "header[\"content-type\"]",
+        .value = "application",
+        .assertion_type = .starts_with,
+    });
+
+    var request = HttpParser.HttpRequest{
+        .method = .GET,
+        .url = "https://api.example.com",
+        .headers = std.ArrayList(http.Header).init(allocator),
+        .assertions = assertions,
+        .body = null,
+    };
+
+    var response_headers = std.StringHashMap([]const u8).init(allocator);
+    try response_headers.put("content-type", "application/json");
+    defer response_headers.deinit();
+
+    const body = try allocator.dupe(u8, "Hello world!");
     defer allocator.free(body);
     const response = Client.HttpResponse{
         .status = http.Status.ok,
