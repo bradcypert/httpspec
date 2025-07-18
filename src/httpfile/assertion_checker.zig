@@ -54,6 +54,102 @@ fn extractHeaderName(key: []const u8) ![]const u8 {
     return key[start_quote + 1 .. end_quote];
 }
 
+fn matchesRegex(text: []const u8, pattern: []const u8) bool {
+    if (pattern.len == 0) return text.len == 0;
+    
+    // Handle anchors
+    const starts_with_anchor = pattern[0] == '^';
+    const ends_with_anchor = pattern.len > 0 and pattern[pattern.len - 1] == '$';
+    
+    var actual_pattern = pattern;
+    if (starts_with_anchor) actual_pattern = pattern[1..];
+    if (ends_with_anchor and actual_pattern.len > 0) actual_pattern = actual_pattern[0..actual_pattern.len - 1];
+    
+    if (starts_with_anchor and ends_with_anchor) {
+        return matchesRegexAt(text, actual_pattern, 0) == text.len;
+    } else if (starts_with_anchor) {
+        return matchesRegexAt(text, actual_pattern, 0) != null;
+    } else if (ends_with_anchor) {
+        var i: usize = 0;
+        while (i <= text.len) : (i += 1) {
+            if (matchesRegexAt(text[i..], actual_pattern, 0)) |end_pos| {
+                if (i + end_pos == text.len) return true;
+            }
+        }
+        return false;
+    } else {
+        var i: usize = 0;
+        while (i <= text.len) : (i += 1) {
+            if (matchesRegexAt(text[i..], actual_pattern, 0) != null) return true;
+        }
+        return false;
+    }
+}
+
+fn matchesRegexAt(text: []const u8, pattern: []const u8, text_pos: usize) ?usize {
+    var p_pos: usize = 0;
+    var t_pos = text_pos;
+    
+    while (p_pos < pattern.len and t_pos < text.len) {
+        if (p_pos + 1 < pattern.len and pattern[p_pos + 1] == '*') {
+            // Handle .* or character*
+            const match_char = pattern[p_pos];
+            p_pos += 2; // Skip char and *
+            
+            // Try matching zero occurrences first
+            if (matchesRegexAt(text, pattern[p_pos..], t_pos)) |end_pos| {
+                return t_pos + end_pos;
+            }
+            
+            // Try matching one or more occurrences
+            while (t_pos < text.len) {
+                if (match_char == '.' or text[t_pos] == match_char) {
+                    t_pos += 1;
+                    if (matchesRegexAt(text, pattern[p_pos..], t_pos)) |end_pos| {
+                        return t_pos + end_pos;
+                    }
+                } else {
+                    break;
+                }
+            }
+            return null;
+        } else if (pattern[p_pos] == '.') {
+            // Match any single character
+            t_pos += 1;
+            p_pos += 1;
+        } else if (pattern[p_pos] == '[') {
+            // Character class
+            const close_bracket = std.mem.indexOfScalarPos(u8, pattern, p_pos + 1, ']') orelse return null;
+            const char_class = pattern[p_pos + 1..close_bracket];
+            var matched = false;
+            for (char_class) |c| {
+                if (text[t_pos] == c) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) return null;
+            t_pos += 1;
+            p_pos = close_bracket + 1;
+        } else {
+            // Literal character match
+            if (text[t_pos] != pattern[p_pos]) return null;
+            t_pos += 1;
+            p_pos += 1;
+        }
+    }
+    
+    // Handle remaining .* patterns at end
+    while (p_pos + 1 < pattern.len and pattern[p_pos + 1] == '*') {
+        p_pos += 2;
+    }
+    
+    if (p_pos == pattern.len) {
+        return t_pos - text_pos;
+    }
+    return null;
+}
+
 pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !void {
     const stderr = std.io.getStdErr().writer();
     for (request.assertions.items) |assertion| {
@@ -181,6 +277,58 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                     }
                 } else {
                     stderr.print("[Fail] Invalid assertion key for starts_with: {s}\n", .{assertion.key}) catch {};
+                    return error.InvalidAssertionKey;
+                }
+            },
+            .matches_regex => {
+                if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
+                    var status_buf: [3]u8 = undefined;
+                    const status_code = @intFromEnum(response.status.?);
+                    const status_str = std.fmt.bufPrint(&status_buf, "{}", .{status_code}) catch return error.StatusCodeFormat;
+                    if (!matchesRegex(status_str, assertion.value)) {
+                        stderr.print("[Fail] Expected status code to match regex \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
+                        return error.StatusCodeNotMatchesRegex;
+                    }
+                } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
+                    if (!matchesRegex(response.body, assertion.value)) {
+                        stderr.print("[Fail] Expected body content to match regex \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
+                        return error.BodyContentNotMatchesRegex;
+                    }
+                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                    const header_name = try extractHeaderName(assertion.key);
+                    const actual_value = response.headers.get(header_name);
+                    if (actual_value == null or !matchesRegex(actual_value.?, assertion.value)) {
+                        stderr.print("[Fail] Expected header \"{s}\" to match regex \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
+                        return error.HeaderNotMatchesRegex;
+                    }
+                } else {
+                    stderr.print("[Fail] Invalid assertion key for matches_regex: {s}\n", .{assertion.key}) catch {};
+                    return error.InvalidAssertionKey;
+                }
+            },
+            .not_matches_regex => {
+                if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
+                    var status_buf: [3]u8 = undefined;
+                    const status_code = @intFromEnum(response.status.?);
+                    const status_str = std.fmt.bufPrint(&status_buf, "{}", .{status_code}) catch return error.StatusCodeFormat;
+                    if (matchesRegex(status_str, assertion.value)) {
+                        stderr.print("[Fail] Expected status code to NOT match regex \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
+                        return error.StatusCodeMatchesRegexButShouldnt;
+                    }
+                } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
+                    if (matchesRegex(response.body, assertion.value)) {
+                        stderr.print("[Fail] Expected body content to NOT match regex \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
+                        return error.BodyContentMatchesRegexButShouldnt;
+                    }
+                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                    const header_name = try extractHeaderName(assertion.key);
+                    const actual_value = response.headers.get(header_name);
+                    if (actual_value != null and matchesRegex(actual_value.?, assertion.value)) {
+                        stderr.print("[Fail] Expected header \"{s}\" to NOT match regex \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
+                        return error.HeaderMatchesRegexButShouldnt;
+                    }
+                } else {
+                    stderr.print("[Fail] Invalid assertion key for not_matches_regex: {s}\n", .{assertion.key}) catch {};
                     return error.InvalidAssertionKey;
                 }
             },
@@ -330,6 +478,64 @@ test "HttpParser supports starts_with for status, body, and header" {
     defer response_headers.deinit();
 
     const body = try allocator.dupe(u8, "Hello world!");
+    defer allocator.free(body);
+    const response = Client.HttpResponse{
+        .status = http.Status.ok,
+        .headers = response_headers,
+        .body = body,
+        .allocator = allocator,
+    };
+
+    try check(&request, response);
+}
+
+test "HttpParser supports matches_regex and not_matches_regex for status, body, and headers" {
+    const allocator = std.testing.allocator;
+
+    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
+    defer assertions.deinit();
+
+    // Should pass: status matches regex for 2xx codes
+    try assertions.append(HttpParser.Assertion{
+        .key = "status",
+        .value = "^2.*",
+        .assertion_type = .matches_regex,
+    });
+
+    // Should pass: body matches regex for JSON-like content
+    try assertions.append(HttpParser.Assertion{
+        .key = "body",
+        .value = ".*success.*",
+        .assertion_type = .matches_regex,
+    });
+
+    // Should pass: header matches regex for application/* content types
+    try assertions.append(HttpParser.Assertion{
+        .key = "header[\"content-type\"]",
+        .value = "application/.*",
+        .assertion_type = .matches_regex,
+    });
+
+    // Should pass: status does not match regex for error codes
+    try assertions.append(HttpParser.Assertion{
+        .key = "status",
+        .value = "^[45].*",
+        .assertion_type = .not_matches_regex,
+    });
+
+    var request = HttpParser.HttpRequest{
+        .method = .GET,
+        .url = "https://api.example.com",
+        .headers = std.ArrayList(http.Header).init(allocator),
+        .assertions = assertions,
+        .body = null,
+    };
+
+    var response_headers = std.StringHashMap([]const u8).init(allocator);
+    try response_headers.put("content-type", "application/json");
+    defer response_headers.deinit();
+
+    const body = try allocator.dupe(u8, "Operation success completed");
     defer allocator.free(body);
     const response = Client.HttpResponse{
         .status = http.Status.ok,
