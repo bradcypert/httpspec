@@ -13,8 +13,8 @@ const AssertionType = enum {
     not_contains,
     starts_with,
     ends_with,
-    // matches_regex, TODO: Soon.
-    // not_matches_regex,
+    matches_regex,
+    not_matches_regex,
 
     pub fn fromString(s: []const u8) ?AssertionType {
         if (std.ascii.eqlIgnoreCase(s, "==")) return .equal;
@@ -24,8 +24,8 @@ const AssertionType = enum {
         if (std.ascii.eqlIgnoreCase(s, "not_contains")) return .not_contains;
         if (std.ascii.eqlIgnoreCase(s, "starts_with")) return .starts_with;
         if (std.ascii.eqlIgnoreCase(s, "ends_with")) return .ends_with;
-        // if (std.ascii.eqlIgnoreCase(s, "matches_regex")) return .matches_regex;
-        // if (std.ascii.eqlIgnoreCase(s, "not_matches_regex")) return .not_matches_regex;
+        if (std.ascii.eqlIgnoreCase(s, "matches_regex")) return .matches_regex;
+        if (std.ascii.eqlIgnoreCase(s, "not_matches_regex")) return .not_matches_regex;
         return null;
     }
 };
