@@ -95,10 +95,15 @@ fn collectSpecFiles(
 
 /// Runs all requests in a spec file and updates the reporter.
 fn runTest(
-    allocator: std.mem.Allocator,
+    base_allocator: std.mem.Allocator,
     reporter: *TestReporter.BasicReporter,
     path: []const u8,
 ) void {
+    // Create arena allocator for this test to provide memory isolation
+    var arena = std.heap.ArenaAllocator.init(base_allocator);
+    defer arena.deinit(); // Automatically frees all test allocations
+    const allocator = arena.allocator();
+
     var has_failure = false;
     reporter.incTestCount();
 
@@ -112,13 +117,13 @@ fn runTest(
         std.debug.print("Failed to convert items to owned slice in file {s}: {s}\n", .{ path, @errorName(err) });
         return;
     };
-    defer allocator.free(owned_items);
+    // Note: No need to manually free owned_items since arena will handle it
 
     var client = Client.HttpClient.init(allocator);
     defer client.deinit();
 
     for (owned_items) |*owned_item| {
-        defer owned_item.deinit(allocator);
+        // Note: No need to manually deinit owned_item since arena will handle it
         var responses = client.execute(owned_item) catch |err| {
             reporter.incTestInvalid();
             std.debug.print("Failed to execute request in file {s}: {s}\n", .{ path, @errorName(err) });
