@@ -16,10 +16,10 @@ fn matchesRegex(text: []const u8, pattern: []const u8) bool {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const compiled_regex = regex.Regex.compile(allocator, pattern) catch return false;
+    var compiled_regex = regex.Regex.compile(allocator, pattern) catch return false;
     defer compiled_regex.deinit();
 
-    return compiled_regex.match(text);
+    return compiled_regex.match(text) catch return false;
 }
 
 pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !void {
