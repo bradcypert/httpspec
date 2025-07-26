@@ -43,6 +43,7 @@ test "HttpParser supports contains and not_contains for headers" {
 }
 const std = @import("std");
 const http = std.http;
+const regex = @import("regex");
 const HttpParser = @import("./parser.zig");
 const Client = @import("./http_client.zig");
 
@@ -55,99 +56,14 @@ fn extractHeaderName(key: []const u8) ![]const u8 {
 }
 
 fn matchesRegex(text: []const u8, pattern: []const u8) bool {
-    if (pattern.len == 0) return text.len == 0;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     
-    // Handle anchors
-    const starts_with_anchor = pattern[0] == '^';
-    const ends_with_anchor = pattern.len > 0 and pattern[pattern.len - 1] == '$';
+    const compiled_regex = regex.compile(allocator, pattern) catch return false;
+    defer compiled_regex.deinit();
     
-    var actual_pattern = pattern;
-    if (starts_with_anchor) actual_pattern = pattern[1..];
-    if (ends_with_anchor and actual_pattern.len > 0) actual_pattern = actual_pattern[0..actual_pattern.len - 1];
-    
-    if (starts_with_anchor and ends_with_anchor) {
-        return matchesRegexAt(text, actual_pattern, 0) == text.len;
-    } else if (starts_with_anchor) {
-        return matchesRegexAt(text, actual_pattern, 0) != null;
-    } else if (ends_with_anchor) {
-        var i: usize = 0;
-        while (i <= text.len) : (i += 1) {
-            if (matchesRegexAt(text[i..], actual_pattern, 0)) |end_pos| {
-                if (i + end_pos == text.len) return true;
-            }
-        }
-        return false;
-    } else {
-        var i: usize = 0;
-        while (i <= text.len) : (i += 1) {
-            if (matchesRegexAt(text[i..], actual_pattern, 0) != null) return true;
-        }
-        return false;
-    }
-}
-
-fn matchesRegexAt(text: []const u8, pattern: []const u8, text_pos: usize) ?usize {
-    var p_pos: usize = 0;
-    var t_pos = text_pos;
-    
-    while (p_pos < pattern.len and t_pos < text.len) {
-        if (p_pos + 1 < pattern.len and pattern[p_pos + 1] == '*') {
-            // Handle .* or character*
-            const match_char = pattern[p_pos];
-            p_pos += 2; // Skip char and *
-            
-            // Try matching zero occurrences first
-            if (matchesRegexAt(text, pattern[p_pos..], t_pos)) |end_pos| {
-                return t_pos + end_pos;
-            }
-            
-            // Try matching one or more occurrences
-            while (t_pos < text.len) {
-                if (match_char == '.' or text[t_pos] == match_char) {
-                    t_pos += 1;
-                    if (matchesRegexAt(text, pattern[p_pos..], t_pos)) |end_pos| {
-                        return t_pos + end_pos;
-                    }
-                } else {
-                    break;
-                }
-            }
-            return null;
-        } else if (pattern[p_pos] == '.') {
-            // Match any single character
-            t_pos += 1;
-            p_pos += 1;
-        } else if (pattern[p_pos] == '[') {
-            // Character class
-            const close_bracket = std.mem.indexOfScalarPos(u8, pattern, p_pos + 1, ']') orelse return null;
-            const char_class = pattern[p_pos + 1..close_bracket];
-            var matched = false;
-            for (char_class) |c| {
-                if (text[t_pos] == c) {
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched) return null;
-            t_pos += 1;
-            p_pos = close_bracket + 1;
-        } else {
-            // Literal character match
-            if (text[t_pos] != pattern[p_pos]) return null;
-            t_pos += 1;
-            p_pos += 1;
-        }
-    }
-    
-    // Handle remaining .* patterns at end
-    while (p_pos + 1 < pattern.len and pattern[p_pos + 1] == '*') {
-        p_pos += 2;
-    }
-    
-    if (p_pos == pattern.len) {
-        return t_pos - text_pos;
-    }
-    return null;
+    return compiled_regex.match(text);
 }
 
 pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !void {

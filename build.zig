@@ -4,6 +4,7 @@ pub fn build(b: *std.Build) void {
     const exe_name = b.option([]const u8, "exe_name", "Name of the executable") orelse "httpspec";
     const dependencies = [_][]const u8{
         "clap",
+        "regex",
     };
 
     const target = b.standardTargetOptions(.{});
