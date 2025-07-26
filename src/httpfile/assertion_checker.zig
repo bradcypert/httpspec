@@ -1,46 +1,3 @@
-test "HttpParser supports contains and not_contains for headers" {
-    const allocator = std.testing.allocator;
-
-    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
-    defer assertions.deinit();
-
-    // Should pass: header contains "json"
-    try assertions.append(HttpParser.Assertion{
-        .key = "header[\"content-type\"]",
-        .value = "json",
-        .assertion_type = .contains,
-    });
-
-    // Should pass: header does not contain "xml"
-    try assertions.append(HttpParser.Assertion{
-        .key = "header[\"content-type\"]",
-        .value = "xml",
-        .assertion_type = .not_contains,
-    });
-
-    var request = HttpParser.HttpRequest{
-        .method = .GET,
-        .url = "https://api.example.com",
-        .headers = std.ArrayList(http.Header).init(allocator),
-        .assertions = assertions,
-        .body = null,
-    };
-
-    var response_headers = std.StringHashMap([]const u8).init(allocator);
-    try response_headers.put("content-type", "application/json");
-    defer response_headers.deinit();
-
-    const body = try allocator.dupe(u8, "irrelevant");
-    defer allocator.free(body);
-    const response = Client.HttpResponse{
-        .status = http.Status.ok,
-        .headers = response_headers,
-        .body = body,
-        .allocator = allocator,
-    };
-
-    try check(&request, response);
-}
 const std = @import("std");
 const http = std.http;
 const regex = @import("regex");
@@ -59,10 +16,9 @@ fn matchesRegex(text: []const u8, pattern: []const u8) bool {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    
-    const compiled_regex = regex.compile(allocator, pattern) catch return false;
+    const compiled_regex = regex.Regex.compile(allocator, pattern) catch return false;
     defer compiled_regex.deinit();
-    
+
     return compiled_regex.match(text);
 }
 
@@ -452,6 +408,50 @@ test "HttpParser supports matches_regex and not_matches_regex for status, body, 
     defer response_headers.deinit();
 
     const body = try allocator.dupe(u8, "Operation success completed");
+    defer allocator.free(body);
+    const response = Client.HttpResponse{
+        .status = http.Status.ok,
+        .headers = response_headers,
+        .body = body,
+        .allocator = allocator,
+    };
+
+    try check(&request, response);
+}
+
+test "HttpParser supports contains and not_contains for headers" {
+    const allocator = std.testing.allocator;
+
+    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
+    defer assertions.deinit();
+
+    // Should pass: header contains "json"
+    try assertions.append(HttpParser.Assertion{
+        .key = "header[\"content-type\"]",
+        .value = "json",
+        .assertion_type = .contains,
+    });
+
+    // Should pass: header does not contain "xml"
+    try assertions.append(HttpParser.Assertion{
+        .key = "header[\"content-type\"]",
+        .value = "xml",
+        .assertion_type = .not_contains,
+    });
+
+    var request = HttpParser.HttpRequest{
+        .method = .GET,
+        .url = "https://api.example.com",
+        .headers = std.ArrayList(http.Header).init(allocator),
+        .assertions = assertions,
+        .body = null,
+    };
+
+    var response_headers = std.StringHashMap([]const u8).init(allocator);
+    try response_headers.put("content-type", "application/json");
+    defer response_headers.deinit();
+
+    const body = try allocator.dupe(u8, "irrelevant");
     defer allocator.free(body);
     const response = Client.HttpResponse{
         .status = http.Status.ok,
