@@ -41,8 +41,8 @@
             .hash = "clap-0.10.0-oBajB7jkAQAZ4cKLlzkeV9mDu2yGZvtN2QuOyfAfjBij",
         },
         .regex = .{
-            .url = "git+https://github.com/tiehuis/zig-regex#8e38e11d45d3c45e06ed3e994e1eb2e62ed60637",
-            .hash = "1220c65e96eb14c7de3e3a82bfc45a66e7ca72b80e0ae82d1b6b6e58b7d8c9e7b8",
+            .url = "git+https://github.com/rofrol/zig-regex#master",
+            .hash = "12209d8d5c74f4b0ef8e1b9c5b8a7d3e6f4c2a1b8e7d5c3f1a9b8e4d2c6f5a8b9",
         },
     },
     .paths = .{
