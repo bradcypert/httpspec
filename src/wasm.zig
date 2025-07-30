@@ -137,10 +137,6 @@ export fn executeHttpSpecComplete(content_ptr: [*]const u8, content_len: usize) 
     
     // Parse the HTTPSpec content
     var items = HttpParser.parseContent(allocator, content) catch |err| {
-        const error_msg = std.fmt.allocPrint(allocator, "Parse failed: {s}", .{@errorName(err)}) catch "Parse failed";
-        defer allocator.free(error_msg);
-        logErrorToConsole(error_msg);
-        
         const error_json = std.fmt.bufPrint(&result_buffer, 
             \\{{"success": false, "error": "Parse failed: {s}", "results": []}}
         , .{@errorName(err)}) catch "{{\"success\": false, \"error\": \"JSON format error\", \"results\": []}}";
@@ -150,10 +146,6 @@ export fn executeHttpSpecComplete(content_ptr: [*]const u8, content_len: usize) 
     };
     
     const owned_items = items.toOwnedSlice() catch |err| {
-        const error_msg = std.fmt.allocPrint(allocator, "Failed to convert items: {s}", .{@errorName(err)}) catch "Failed to convert items";
-        defer allocator.free(error_msg);
-        logErrorToConsole(error_msg);
-        
         const error_json = std.fmt.bufPrint(&result_buffer, 
             \\{{"success": false, "error": "Failed to convert items: {s}", "results": []}}
         , .{@errorName(err)}) catch "{{\"success\": false, \"error\": \"JSON format error\", \"results\": []}}";
@@ -182,7 +174,6 @@ export fn executeHttpSpecComplete(content_ptr: [*]const u8, content_len: usize) 
         var response = client.execute(request) catch |err| {
             const error_msg = std.fmt.allocPrint(allocator, "HTTP request failed: {s}", .{@errorName(err)}) catch "HTTP request failed";
             // Don't defer free - the TestResult needs to keep the string
-            logErrorToConsole(error_msg);
             
             results.append(TestResult.init(request_name, false, error_msg, null)) catch {
                 logErrorToConsole("Failed to append test result");
