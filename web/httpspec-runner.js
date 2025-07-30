@@ -24,6 +24,10 @@ class ImprovedHTTPSpecRunner {
     try {
       console.log("Loading WASM module...");
 
+      // Initialize fetch result buffer
+      this.fetchResultBuffer = new ArrayBuffer(65536); // 64KB buffer
+      this.fetchResultLength = 0;
+
       const wasmModule = await WebAssembly.instantiateStreaming(
         fetch("./httpspec.wasm"),
         {
@@ -37,6 +41,16 @@ class ImprovedHTTPSpecRunner {
               const message = this.getStringFromWasm(ptr, len);
               console.error("WASM Error:", message);
             },
+            
+            // HTTP fetch function - required by new WASM implementation
+            fetchHttp: (methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen) => {
+              return this.performFetch(methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen);
+            },
+            
+            // Get length of last fetch result
+            getFetchResultLength: () => {
+              return this.fetchResultLength;
+            }
           },
         }
       );
@@ -62,49 +76,164 @@ class ImprovedHTTPSpecRunner {
 
   writeStringToWasm(str) {
     const bytes = this.textEncoder.encode(str);
-
-    // Simple allocation strategy - in production you'd want proper memory management
-    const currentSize = this.wasmMemory.buffer.byteLength;
-    const needed = Math.ceil((currentSize + bytes.length) / 65536) * 65536;
-    if (needed > currentSize) {
-      this.wasmMemory.grow((needed - currentSize) / 65536);
+    
+    // Use a safer allocation strategy - allocate at the end but leave space
+    const memorySize = this.wasmMemory.buffer.byteLength;
+    const safeOffset = 4096; // Leave 4KB buffer at the end
+    const ptr = memorySize - bytes.length - safeOffset;
+    
+    // Ensure we have enough space
+    if (ptr < 0) {
+      const pagesNeeded = Math.ceil((bytes.length + safeOffset) / 65536);
+      this.wasmMemory.grow(pagesNeeded);
+      const newSize = this.wasmMemory.buffer.byteLength;
+      const newPtr = newSize - bytes.length - safeOffset;
+      const wasmBytes = new Uint8Array(this.wasmMemory.buffer, newPtr, bytes.length);
+      wasmBytes.set(bytes);
+      return { ptr: newPtr, len: bytes.length };
     }
-
-    const ptr = currentSize;
+    
     const wasmBytes = new Uint8Array(this.wasmMemory.buffer, ptr, bytes.length);
     wasmBytes.set(bytes);
     return { ptr, len: bytes.length };
   }
 
+  // HTTP fetch implementation called by WASM - this needs to be synchronous-ish
+  performFetch(methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen) {
+    try {
+      const method = this.getStringFromWasm(methodPtr, methodLen);
+      const url = this.getStringFromWasm(urlPtr, urlLen);
+      const headersJson = this.getStringFromWasm(headersPtr, headersLen);
+      const body = bodyLen > 0 ? this.getStringFromWasm(bodyPtr, bodyLen) : null;
+
+      
+      // Parse headers from JSON
+      let headers = {};
+      try {
+        headers = JSON.parse(headersJson);
+      } catch (e) {
+        console.warn('Failed to parse headers JSON:', e);
+      }
+
+      // Since WASM expects synchronous behavior but fetch is async,
+      // we'll use XMLHttpRequest for synchronous operation
+      const xhr = new XMLHttpRequest();
+      xhr.open(method, url, false); // false = synchronous
+      
+      // Set headers
+      for (const [key, value] of Object.entries(headers)) {
+        xhr.setRequestHeader(key, value);
+      }
+      
+      try {
+        xhr.send(body);
+        
+        // Get response headers
+        const responseHeaders = {};
+        const headerText = xhr.getAllResponseHeaders();
+        if (headerText) {
+          headerText.split('\r\n').forEach(line => {
+            const parts = line.split(': ');
+            if (parts.length === 2) {
+              responseHeaders[parts[0].toLowerCase()] = parts[1];
+            }
+          });
+        }
+        
+        const responseData = {
+          status: xhr.status,
+          headers: responseHeaders,
+          body: xhr.responseText || ''
+        };
+        
+        const responseJson = JSON.stringify(responseData);
+        const responseBytes = this.textEncoder.encode(responseJson);
+        
+        // Store result directly in WASM memory instead of separate buffer
+        this.fetchResultLength = responseBytes.length;
+        
+        // Allocate space in WASM memory for the response
+        const memorySize = this.wasmMemory.buffer.byteLength;
+        const responsePtr = memorySize - responseBytes.length - 8192; // Leave 8KB buffer
+        
+        // Copy response into WASM memory
+        const wasmView = new Uint8Array(this.wasmMemory.buffer, responsePtr, responseBytes.length);
+        wasmView.set(responseBytes);
+        
+        
+        // Return pointer to WASM memory location
+        return responsePtr;
+        
+      } catch (error) {
+        console.error('XHR error:', error);
+        
+        // Store error response in WASM memory
+        const errorResponse = JSON.stringify({
+          status: 0,
+          headers: {},
+          body: `Network error: ${error.message}`
+        });
+        
+        const errorBytes = this.textEncoder.encode(errorResponse);
+        this.fetchResultLength = errorBytes.length;
+        
+        const memorySize = this.wasmMemory.buffer.byteLength;
+        const errorPtr = memorySize - errorBytes.length - 8192;
+        
+        const wasmView = new Uint8Array(this.wasmMemory.buffer, errorPtr, errorBytes.length);
+        wasmView.set(errorBytes);
+        
+        return errorPtr;
+      }
+      
+    } catch (error) {
+      console.error('performFetch error:', error);
+      
+      const errorResponse = JSON.stringify({
+        status: 500,
+        headers: {},
+        body: `Fetch setup error: ${error.message}`
+      });
+      
+      const errorBytes = this.textEncoder.encode(errorResponse);
+      this.fetchResultLength = errorBytes.length;
+      
+      const memorySize = this.wasmMemory.buffer.byteLength;
+      const errorPtr = memorySize - errorBytes.length - 8192;
+      
+      const wasmView = new Uint8Array(this.wasmMemory.buffer, errorPtr, errorBytes.length);
+      wasmView.set(errorBytes);
+      
+      return errorPtr;
+    }
+  }
+
   /**
-   * SINGLE INTERFACE: Execute HTTPSpec content and get complete results
+   * UNIFIED INTERFACE: Execute HTTPSpec content completely in WASM
    *
-   * This is the key improvement - one function call gives you everything:
-   * parsing, HTTP execution, assertion checking, and formatted results.
+   * Now using the new executeHttpSpecComplete function that handles:
+   * parsing, HTTP execution (via fetchHttp), assertion checking, and results.
    *
-   * Internally it uses WASM for parsing and JS for HTTP, but from the
-   * caller's perspective it's just one simple function.
+   * This is a true single function call that gives you everything done in WASM.
    */
   async executeHttpSpec(content) {
     if (!this.wasmModule) {
       throw new Error("WASM module not loaded yet");
     }
 
-    console.log("Starting complete HTTPSpec execution...");
-    console.log("Content length:", content.length, "characters");
 
     try {
-      // Step 1: Parse with WASM (single function call)
+      // Single call to WASM that does everything
       const { ptr, len } = this.writeStringToWasm(content);
-      const resultPtr = this.wasmModule.exports.parseHttpSpecToJson(ptr, len);
+      const resultPtr = this.wasmModule.exports.executeHttpSpecComplete(ptr, len);
       const resultLen = this.wasmModule.exports.getResultLength();
-      const parseJson = this.getStringFromWasm(resultPtr, resultLen);
-      const parseResult = JSON.parse(parseJson);
+      const resultJson = this.getStringFromWasm(resultPtr, resultLen);
+      const wasmResult = JSON.parse(resultJson);
 
-      if (!parseResult.success) {
+      if (!wasmResult.success) {
         return {
           success: false,
-          error: parseResult.error,
+          error: wasmResult.error,
           total_requests: 0,
           passed_requests: 0,
           failed_requests: 0,
@@ -112,47 +241,34 @@ class ImprovedHTTPSpecRunner {
         };
       }
 
-      console.log("Parsed", parseResult.requests.length, "requests");
+      // Convert WASM results to our expected format
+      const results = wasmResult.results || [];
+      const passedCount = results.filter(r => r.passed).length;
+      const failedCount = results.length - passedCount;
 
-      // Step 2: Execute all HTTP requests using JavaScript's fetch
-      const executionResults = [];
-      let passedCount = 0;
-      let failedCount = 0;
-
-      for (const request of parseResult.requests) {
-        console.log(`🌐 Executing ${request.method} ${request.url}`);
-        const result = await this.executeRequest(request);
-        executionResults.push(result);
-
-        if (result.success) {
-          passedCount++;
-        } else {
-          failedCount++;
-        }
-      }
-
-      // Step 3: Return comprehensive results
       const finalResult = {
         success: failedCount === 0,
-        total_requests: executionResults.length,
+        total_requests: results.length,
         passed_requests: passedCount,
         failed_requests: failedCount,
-        requests: executionResults,
+        requests: results.map(result => ({
+          url: `Request: ${result.name}`,
+          method: "WASM",
+          status_code: result.status || null,
+          success: result.passed,
+          error: result.error || null,
+          response_body: "",
+          assertions: [] // WASM handles assertions internally
+        })),
       };
 
-      console.log("Execution complete:", {
-        success: finalResult.success,
-        total: finalResult.total_requests,
-        passed: finalResult.passed_requests,
-        failed: finalResult.failed_requests,
-      });
 
       return finalResult;
     } catch (error) {
-      console.error("Failed to execute HTTPSpec:", error);
+      console.error("Failed to execute HTTPSpec in WASM:", error);
       return {
         success: false,
-        error: `Execution failed: ${error.message}`,
+        error: `WASM execution failed: ${error.message}`,
         total_requests: 0,
         passed_requests: 0,
         failed_requests: 0,
@@ -161,171 +277,6 @@ class ImprovedHTTPSpecRunner {
     }
   }
 
-  /**
-   * Execute a single HTTP request and check its assertions
-   */
-  async executeRequest(request) {
-    try {
-      // Prepare fetch options
-      const options = {
-        method: request.method,
-        headers: request.headers || {},
-      };
-
-      // Add body for non-GET requests
-      if (request.body && request.method !== "GET") {
-        options.body = request.body;
-      }
-
-      // Add timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      options.signal = controller.signal;
-
-      // Execute the HTTP request
-      const response = await fetch(request.url, options);
-      clearTimeout(timeoutId);
-
-      const responseText = await response.text();
-      const responseHeaders = Object.fromEntries(response.headers.entries());
-
-      // Check all assertions
-      const assertionResults = [];
-      let allPassed = true;
-
-      for (const assertion of request.assertions) {
-        const result = this.checkAssertion(
-          assertion,
-          response,
-          responseText,
-          responseHeaders
-        );
-        assertionResults.push(result);
-        if (!result.passed) {
-          allPassed = false;
-        }
-      }
-
-      return {
-        url: request.url,
-        method: request.method,
-        status_code: response.status,
-        success: allPassed,
-        error: null,
-        response_body:
-          responseText.length > 500
-            ? responseText.substring(0, 500) + "..."
-            : responseText,
-        assertions: assertionResults,
-      };
-    } catch (error) {
-      // Handle timeout and other errors
-      let errorMessage = error.message;
-      if (error.name === "AbortError") {
-        errorMessage = "Request timeout (10 seconds)";
-      } else if (error.message.includes("Failed to fetch")) {
-        errorMessage = "Network error or CORS issue";
-      }
-
-      return {
-        url: request.url,
-        method: request.method,
-        status_code: null,
-        success: false,
-        error: errorMessage,
-        response_body: "",
-        assertions: [],
-      };
-    }
-  }
-
-  /**
-   * Check a single assertion against the HTTP response
-   */
-  checkAssertion(assertion, response, responseText, responseHeaders) {
-    const key = assertion.key.toLowerCase();
-    const expected = assertion.value;
-    const type = assertion.type;
-
-    let actual = "";
-    let passed = false;
-
-    try {
-      if (key === "status") {
-        actual = response.status.toString();
-        switch (type) {
-          case "equal":
-            passed = actual === expected;
-            break;
-          case "not_equal":
-            passed = actual !== expected;
-            break;
-          case "contains":
-            passed = actual.includes(expected);
-            break;
-          case "not_contains":
-            passed = !actual.includes(expected);
-            break;
-        }
-      } else if (key === "body") {
-        actual =
-          responseText.length > 200
-            ? responseText.substring(0, 200) + "..."
-            : responseText;
-        switch (type) {
-          case "equal":
-            passed = responseText === expected;
-            break;
-          case "not_equal":
-            passed = responseText !== expected;
-            break;
-          case "contains":
-            passed = responseText.includes(expected);
-            break;
-          case "not_contains":
-            passed = !responseText.includes(expected);
-            break;
-        }
-      } else if (key.startsWith("header[") && key.endsWith("]")) {
-        // Extract header name from header["name"] format
-        const headerName = key.slice(8, -2).toLowerCase();
-        const headerValue = responseHeaders[headerName] || "";
-        actual = headerValue;
-
-        switch (type) {
-          case "equal":
-            passed = headerValue.toLowerCase() === expected.toLowerCase();
-            break;
-          case "not_equal":
-            passed = headerValue.toLowerCase() !== expected.toLowerCase();
-            break;
-          case "contains":
-            passed = headerValue.toLowerCase().includes(expected.toLowerCase());
-            break;
-          case "not_contains":
-            passed = !headerValue
-              .toLowerCase()
-              .includes(expected.toLowerCase());
-            break;
-        }
-      } else {
-        // Unsupported assertion key
-        actual = "unsupported assertion key";
-        passed = false;
-      }
-    } catch (error) {
-      actual = `error: ${error.message}`;
-      passed = false;
-    }
-
-    return {
-      key: assertion.key,
-      expected: expected,
-      actual: actual,
-      passed: passed,
-      type: type,
-    };
-  }
 
   /**
    * Display results in a user-friendly format
@@ -446,38 +397,6 @@ class ImprovedHTTPSpecRunner {
     return div.innerHTML;
   }
 
-  /**
-   * Test with a sample HTTPSpec
-   */
-  async runSampleTest() {
-    const sampleHttpSpec = `
-### Test HTTP status endpoint
-GET https://httpbin.org/status/200
-
-//# status == 200
-
-### Test JSON endpoint  
-GET https://httpbin.org/json
-
-//# status == 200
-//# header["content-type"] contains "application/json"
-//# body contains "slideshow"
-
-### Test POST endpoint
-POST https://httpbin.org/post
-Content-Type: application/json
-
-{"message": "Hello from HTTPSpec!", "test": true}
-
-//# status == 200
-//# body contains "Hello from HTTPSpec!"
-        `.trim();
-
-    console.log("🧪 Running sample HTTPSpec test...");
-    const results = await this.executeHttpSpec(sampleHttpSpec);
-    this.displayResults(results);
-    return results;
-  }
 }
 
 // Auto-initialize when page loads

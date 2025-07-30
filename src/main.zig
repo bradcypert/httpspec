@@ -125,7 +125,7 @@ fn runTest(
             return;
         };
         defer responses.deinit();
-        AssertionChecker.check(owned_item, responses) catch {
+        AssertionChecker.check(owned_item, responses, std.io.getStdErr().writer()) catch {
             has_failure = true;
             break;
         };

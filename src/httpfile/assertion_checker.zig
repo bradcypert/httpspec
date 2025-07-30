@@ -3,20 +3,19 @@ const http = std.http;
 const HttpParser = @import("./parser.zig");
 const Client = @import("./http_client.zig");
 
-pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !void {
-    const stderr = std.io.getStdErr().writer();
+pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse, writer: anytype) !void {
     for (request.assertions.items) |assertion| {
         switch (assertion.assertion_type) {
             .equal => {
                 if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
                     const assert_status_code = try std.fmt.parseInt(u16, assertion.value, 10);
                     if (response.status != try std.meta.intToEnum(http.Status, assert_status_code)) {
-                        stderr.print("[Fail] Expected status code {d}, got {d}\n", .{ assert_status_code, @intFromEnum(response.status.?) }) catch {};
+                        writer.print("[Fail] Expected status code {d}, got {d}\n", .{ assert_status_code, @intFromEnum(response.status.?) }) catch {};
                         return error.StatusCodeMismatch;
                     }
                 } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
                     if (!std.mem.eql(u8, response.body, assertion.value)) {
-                        stderr.print("[Fail] Expected body content \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
+                        writer.print("[Fail] Expected body content \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
                         return error.BodyContentMismatch;
                     }
                 } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
@@ -24,11 +23,11 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                     const header_name = assertion.key[8 .. assertion.key.len - 2];
                     const actual_value = response.headers.get(header_name);
                     if (actual_value == null or !std.ascii.eqlIgnoreCase(actual_value.?, assertion.value)) {
-                        stderr.print("[Fail] Expected header \"{s}\" to be \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
+                        writer.print("[Fail] Expected header \"{s}\" to be \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
                         return error.HeaderMismatch;
                     }
                 } else {
-                    stderr.print("[Fail] Invalid assertion key: {s}\n", .{assertion.key}) catch {};
+                    writer.print("[Fail] Invalid assertion key: {s}\n", .{assertion.key}) catch {};
                     return error.InvalidAssertionKey;
                 }
             },
@@ -36,12 +35,12 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                 if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
                     const assert_status_code = try std.fmt.parseInt(u16, assertion.value, 10);
                     if (response.status == try std.meta.intToEnum(http.Status, assert_status_code)) {
-                        stderr.print("[Fail] Expected status code to NOT equal {d}, got {d}\n", .{ assert_status_code, @intFromEnum(response.status.?) }) catch {};
+                        writer.print("[Fail] Expected status code to NOT equal {d}, got {d}\n", .{ assert_status_code, @intFromEnum(response.status.?) }) catch {};
                         return error.StatusCodesMatchButShouldnt;
                     }
                 } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
                     if (std.mem.eql(u8, response.body, assertion.value)) {
-                        stderr.print("[Fail] Expected body content to NOT equal \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
+                        writer.print("[Fail] Expected body content to NOT equal \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
                         return error.BodyContentMatchesButShouldnt;
                     }
                 } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
@@ -49,11 +48,11 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                     const header_name = assertion.key[8 .. assertion.key.len - 2];
                     const actual_value = response.headers.get(header_name);
                     if (actual_value != null and std.ascii.eqlIgnoreCase(actual_value.?, assertion.value)) {
-                        stderr.print("[Fail] Expected header \"{s}\" to NOT equal \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
+                        writer.print("[Fail] Expected header \"{s}\" to NOT equal \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
                         return error.HeaderMatchesButShouldnt;
                     }
                 } else {
-                    stderr.print("[Fail] Invalid assertion key: {s}\n", .{assertion.key}) catch {};
+                    writer.print("[Fail] Invalid assertion key: {s}\n", .{assertion.key}) catch {};
                     return error.InvalidAssertionKey;
                 }
             },
@@ -77,16 +76,16 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                     const status_code = @intFromEnum(response.status.?); // .? if status is optional
                     const status_str = std.fmt.bufPrint(&status_buf, "{}", .{status_code}) catch return error.StatusCodeFormat;
                     if (std.mem.indexOf(u8, status_str, assertion.value) == null) {
-                        stderr.print("[Fail] Expected status code to contain \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
+                        writer.print("[Fail] Expected status code to contain \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
                         return error.StatusCodeNotContains;
                     }
                 } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
                     if (std.mem.indexOf(u8, response.body, assertion.value) == null) {
-                        stderr.print("[Fail] Expected body content to NOT contain \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
+                        writer.print("[Fail] Expected body content to NOT contain \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
                         return error.BodyContentNotContains;
                     }
                 } else {
-                    stderr.print("[Fail] Invalid assertion key for contains: {s}\n", .{assertion.key}) catch {};
+                    writer.print("[Fail] Invalid assertion key for contains: {s}\n", .{assertion.key}) catch {};
                     return error.InvalidAssertionKey;
                 }
             },
@@ -96,16 +95,16 @@ pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !v
                     const status_code = @intFromEnum(response.status.?); // .? if status is optional
                     const status_str = std.fmt.bufPrint(&status_buf, "{}", .{status_code}) catch return error.StatusCodeFormat;
                     if (std.mem.indexOf(u8, status_str, assertion.value) != null) {
-                        stderr.print("[Fail] Expected status code to NOT contain \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
+                        writer.print("[Fail] Expected status code to NOT contain \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
                         return error.StatusCodeContainsButShouldnt;
                     }
                 } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
                     if (std.mem.indexOf(u8, response.body, assertion.value) == null) {
-                        stderr.print("[Fail] Expected body content to NOT contain \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
+                        writer.print("[Fail] Expected body content to NOT contain \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
                         return error.BodyContentContainsButShouldnt;
                     }
                 } else {
-                    stderr.print("[Fail] Invalid assertion key for contains: {s}\n", .{assertion.key}) catch {};
+                    writer.print("[Fail] Invalid assertion key for contains: {s}\n", .{assertion.key}) catch {};
                     return error.InvalidAssertionKey;
                 }
             },
@@ -166,7 +165,9 @@ test "HttpParser parses assertions" {
         .allocator = allocator,
     };
 
-    try check(&request, response);
+    var test_output = std.ArrayList(u8).init(allocator);
+    defer test_output.deinit();
+    try check(&request, response, test_output.writer());
 }
 
 test "HttpParser handles NotEquals" {
@@ -215,5 +216,7 @@ test "HttpParser handles NotEquals" {
         .allocator = allocator,
     };
 
-    try check(&request, response);
+    var test_output = std.ArrayList(u8).init(allocator);
+    defer test_output.deinit();
+    try check(&request, response, test_output.writer());
 }
