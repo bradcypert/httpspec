@@ -1,0 +1,6 @@
+### Test JSONPlaceholder API
+GET https://jsonplaceholder.typicode.com/users/1
+Accept: application/json
+
+//# status == 200
+//# body contains "Leanne Graham"
