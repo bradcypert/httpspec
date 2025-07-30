@@ -89,7 +89,7 @@ fn parseHttpResponse(alloc: std.mem.Allocator, json_str: []const u8) !Client.Htt
     var parsed = std.json.parseFromSlice(std.json.Value, alloc, json_str, .{}) catch |err| {
         const error_msg = std.fmt.allocPrint(alloc, "Failed to parse response JSON: {s}", .{@errorName(err)}) catch "Failed to parse response JSON";
         defer alloc.free(error_msg);
-        logErrorToConsole(error_msg);
+        consoleError(error_msg, error_msg.len);
         return error.InvalidResponseJson;
     };
     defer parsed.deinit();
@@ -176,7 +176,7 @@ export fn executeHttpSpecComplete(content_ptr: [*]const u8, content_len: usize) 
             // Don't defer free - the TestResult needs to keep the string
             
             results.append(TestResult.init(request_name, false, error_msg, null)) catch {
-                logErrorToConsole("Failed to append test result");
+                consoleError("Failed to append test result", 30);
                 continue;
             };
             continue;
@@ -192,7 +192,7 @@ export fn executeHttpSpecComplete(content_ptr: [*]const u8, content_len: usize) 
             // Don't defer free - the TestResult needs to keep the string
             
             results.append(TestResult.init(request_name, false, error_msg, status_code)) catch {
-                logErrorToConsole("Failed to append test result");
+                consoleError("Failed to append test result", 30);
                 continue;
             };
             continue;
@@ -200,7 +200,7 @@ export fn executeHttpSpecComplete(content_ptr: [*]const u8, content_len: usize) 
         
         // All assertions passed
         results.append(TestResult.init(request_name, true, null, status_code)) catch {
-            logErrorToConsole("Failed to append test result");
+            consoleError("Failed to append test result", 30);
             continue;
         };
     }
@@ -262,11 +262,6 @@ export fn getResultLength() usize {
 }
 
 
-/// Test function to verify WASM is working
-export fn testWasm() i32 {
-    consoleLog("WASM module loaded successfully!", 30);
-    return 42;
-}
 
 /// Console error writer for assertion failures
 const ConsoleErrorWriter = struct {
@@ -284,24 +279,5 @@ const ConsoleErrorWriter = struct {
     }
 };
 
-/// Logging helper functions for debugging
-fn logToConsole(message: []const u8) void {
-    consoleLog(message.ptr, message.len);
-}
 
-fn logErrorToConsole(message: []const u8) void {
-    consoleError(message.ptr, message.len);
-}
-
-/// Test function for basic HTTPSpec parsing
-export fn testHttpSpecParsing() [*]const u8 {
-    const test_content = 
-        \\### Test request
-        \\GET https://httpbin.org/status/200
-        \\
-        \\//# status == 200
-    ;
-    
-    return executeHttpSpecComplete(test_content.ptr, test_content.len);
-}
 
