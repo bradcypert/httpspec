@@ -4,6 +4,7 @@ pub fn build(b: *std.Build) void {
     const exe_name = b.option([]const u8, "exe_name", "Name of the executable") orelse "httpspec";
     const dependencies = [_][]const u8{
         "clap",
+        "regex",
     };
 
     const target = b.standardTargetOptions(.{});
@@ -56,6 +57,13 @@ pub fn build(b: *std.Build) void {
         // Skip main.zig since it's already covered by exe_unit_tests
         if (std.mem.endsWith(u8, zig_file, "/main.zig")) continue;
         const test_artifact = b.addTest(.{ .root_source_file = b.path(zig_file), .target = target, .optimize = optimize });
+        
+        // Add dependencies to individual test artifacts
+        for (dependencies) |dependency| {
+            const dep = b.dependency(dependency, .{});
+            test_artifact.root_module.addImport(dependency, dep.module(dependency));
+        }
+        
         const run_test = b.addRunArtifact(test_artifact);
         test_run_steps.append(&run_test.step) catch unreachable;
     }

@@ -24,6 +24,28 @@ Httpspec takes this file, executes the first request (/status/200 in this case),
 
 The idea behind Httpspec is to allow you to specify a series of HTTP requests (with assertions) to model a sequence of test steps. For example, the first request in your file may create a user in your API which is then needed by future requests. You may then make another request, using those user credentials, to create an order for that user -- again, this is just an example.
 
+## Installation
+
+Install httpspec and add it to your path. **Do not run copy/paste this script. Read it, and run only the parts that you need.**
+
+```bash
+# Use the appropriate binary for your OS and Arch
+binary="httpspec_linux_arm"    # linux arm
+binary="httpspec_linux_x86"    # linux x86
+binary="httpspec_mac_arm"      # mac arm 
+binary="httpspec_mac_x86"      # mac x86
+binary="httpspec_windows_x86"  # windows
+
+# curl, follow redirects, output to "httpspec", download target latest release
+curl -L -o adl https://github.com/bradcypert/httpspec/releases/latest/download/$binary
+
+# You _may_ need to update permissions for adl
+chmod 744 httpspec
+
+# You probably also want to move this to a place that exists in your path
+mv httpspec /usr/local/bin
+```
+
 # How to Use
 
 ```bash
