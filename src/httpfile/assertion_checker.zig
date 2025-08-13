@@ -4,6 +4,107 @@ const regex = @import("regex");
 const HttpParser = @import("./parser.zig");
 const Client = @import("./http_client.zig");
 
+const Allocator = std.mem.Allocator;
+const ArrayList = std.ArrayList;
+
+pub const FailureReason = enum {
+    status_mismatch,
+    header_mismatch,
+    header_missing,
+    body_mismatch,
+    contains_failed,
+    not_contains_failed,
+    invalid_assertion_key,
+    status_format_error,
+};
+
+pub const AssertionFailure = struct {
+    assertion_key: []const u8,
+    assertion_value: []const u8,
+    assertion_type: HttpParser.AssertionType,
+    expected: []const u8,
+    actual: []const u8,
+    reason: FailureReason,
+    source_file: ?[]const u8 = null,
+    assertion_index: usize = 0,
+
+    pub fn deinit(self: *AssertionFailure, allocator: Allocator) void {
+        allocator.free(self.assertion_key);
+        allocator.free(self.assertion_value);
+        allocator.free(self.expected);
+        allocator.free(self.actual);
+        if (self.source_file) |file| {
+            allocator.free(file);
+        }
+    }
+};
+
+pub const AssertionDiagnostic = struct {
+    failures: ArrayList(AssertionFailure),
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator) AssertionDiagnostic {
+        return .{
+            .failures = ArrayList(AssertionFailure).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *AssertionDiagnostic) void {
+        for (self.failures.items) |*failure| {
+            failure.deinit(self.allocator);
+        }
+        self.failures.deinit();
+    }
+
+    pub fn addFailure(
+        self: *AssertionDiagnostic,
+        assertion: HttpParser.Assertion,
+        expected: []const u8,
+        actual: []const u8,
+        reason: FailureReason,
+        assertion_index: usize,
+        source_file: ?[]const u8,
+    ) !void {
+        const failure = AssertionFailure{
+            .assertion_key = try self.allocator.dupe(u8, assertion.key),
+            .assertion_value = try self.allocator.dupe(u8, assertion.value),
+            .assertion_type = assertion.assertion_type,
+            .expected = try self.allocator.dupe(u8, expected),
+            .actual = try self.allocator.dupe(u8, actual),
+            .reason = reason,
+            .assertion_index = assertion_index,
+            .source_file = if (source_file) |file| try self.allocator.dupe(u8, file) else null,
+        };
+        try self.failures.append(failure);
+    }
+};
+
+pub fn hasFailures(diagnostic: *const AssertionDiagnostic) bool {
+    return diagnostic.failures.items.len > 0;
+}
+
+pub fn reportFailures(diagnostic: *const AssertionDiagnostic, writer: anytype) !void {
+    for (diagnostic.failures.items) |failure| {
+        const source_info = if (failure.source_file) |file| 
+            try std.fmt.allocPrint(diagnostic.allocator, " in {s}:{d}", .{ file, failure.assertion_index + 1 })
+        else 
+            try std.fmt.allocPrint(diagnostic.allocator, " (assertion #{d})", .{ failure.assertion_index + 1 });
+        defer diagnostic.allocator.free(source_info);
+
+        switch (failure.reason) {
+            .status_mismatch => try writer.print("[Fail]{s} Expected status {s}, got {s}\n", .{ source_info, failure.expected, failure.actual }),
+            .header_mismatch => try writer.print("[Fail]{s} Expected header \"{s}\" to be \"{s}\", got \"{s}\"\n", .{ source_info, failure.assertion_key[8..failure.assertion_key.len-2], failure.expected, failure.actual }),
+            .header_missing => try writer.print("[Fail]{s} Expected header \"{s}\" to be \"{s}\", but header was missing\n", .{ source_info, failure.assertion_key[8..failure.assertion_key.len-2], failure.expected }),
+            .body_mismatch => try writer.print("[Fail]{s} Expected body \"{s}\", got \"{s}\"\n", .{ source_info, failure.expected, failure.actual }),
+            .contains_failed => try writer.print("[Fail]{s} Expected {s} to contain \"{s}\", got \"{s}\"\n", .{ source_info, failure.assertion_key, failure.expected, failure.actual }),
+            .not_contains_failed => try writer.print("[Fail]{s} Expected {s} to NOT contain \"{s}\", got \"{s}\"\n", .{ source_info, failure.assertion_key, failure.expected, failure.actual }),
+            .invalid_assertion_key => try writer.print("[Fail]{s} Invalid assertion key: \"{s}\"\n", .{ source_info, failure.assertion_key }),
+            .status_format_error => try writer.print("[Fail]{s} Status format error for assertion \"{s}\"\n", .{ source_info, failure.assertion_key }),
+        }
+    }
+}
+
 fn extractHeaderName(key: []const u8) ![]const u8 {
     // Expects key in the form header["..."]
     const start_quote = std.mem.indexOfScalar(u8, key, '"') orelse return error.InvalidAssertionKey;
@@ -22,194 +123,177 @@ fn matchesRegex(text: []const u8, pattern: []const u8) bool {
     return compiled_regex.match(text) catch return false;
 }
 
-pub fn check(request: *HttpParser.HttpRequest, response: Client.HttpResponse) !void {
-    const stderr = std.io.getStdErr().writer();
-    for (request.assertions.items) |assertion| {
-        switch (assertion.assertion_type) {
-            .equal => {
-                if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
-                    const assert_status_code = try std.fmt.parseInt(u16, assertion.value, 10);
-                    if (response.status != try std.meta.intToEnum(http.Status, assert_status_code)) {
-                        stderr.print("[Fail] Expected status code {d}, got {d}\n", .{ assert_status_code, @intFromEnum(response.status.?) }) catch {};
-                        return error.StatusCodeMismatch;
-                    }
-                } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
-                    if (!std.mem.eql(u8, response.body, assertion.value)) {
-                        stderr.print("[Fail] Expected body content \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
-                        return error.BodyContentMismatch;
-                    }
-                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    const header_name = try extractHeaderName(assertion.key);
-                    const actual_value = response.headers.get(header_name);
-                    if (actual_value == null or !std.ascii.eqlIgnoreCase(actual_value.?, assertion.value)) {
-                        stderr.print("[Fail] Expected header \"{s}\" to be \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
-                        return error.HeaderMismatch;
-                    }
-                } else {
-                    stderr.print("[Fail] Invalid assertion key: {s}\n", .{assertion.key}) catch {};
-                    return error.InvalidAssertionKey;
-                }
-            },
-            .not_equal => {
-                if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
-                    const assert_status_code = try std.fmt.parseInt(u16, assertion.value, 10);
-                    if (response.status == try std.meta.intToEnum(http.Status, assert_status_code)) {
-                        stderr.print("[Fail] Expected status code to NOT equal {d}, got {d}\n", .{ assert_status_code, @intFromEnum(response.status.?) }) catch {};
-                        return error.StatusCodesMatchButShouldnt;
-                    }
-                } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
-                    if (std.mem.eql(u8, response.body, assertion.value)) {
-                        stderr.print("[Fail] Expected body content to NOT equal \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
-                        return error.BodyContentMatchesButShouldnt;
-                    }
-                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    const header_name = try extractHeaderName(assertion.key);
-                    const actual_value = response.headers.get(header_name);
-                    if (actual_value != null and std.ascii.eqlIgnoreCase(actual_value.?, assertion.value)) {
-                        stderr.print("[Fail] Expected header \"{s}\" to NOT equal \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
-                        return error.HeaderMatchesButShouldnt;
-                    }
-                } else {
-                    stderr.print("[Fail] Invalid assertion key: {s}\n", .{assertion.key}) catch {};
-                    return error.InvalidAssertionKey;
-                }
-            },
-            .contains => {
-                if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
-                    var status_buf: [3]u8 = undefined;
-                    const status_code = @intFromEnum(response.status.?); // .? if status is optional
-                    const status_str = std.fmt.bufPrint(&status_buf, "{}", .{status_code}) catch return error.StatusCodeFormat;
-                    if (std.mem.indexOf(u8, status_str, assertion.value) == null) {
-                        stderr.print("[Fail] Expected status code to contain \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
-                        return error.StatusCodeNotContains;
-                    }
-                } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
-                    if (std.mem.indexOf(u8, response.body, assertion.value) == null) {
-                        stderr.print("[Fail] Expected body content to contain \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
-                        return error.BodyContentNotContains;
-                    }
-                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    const header_name = try extractHeaderName(assertion.key);
-                    const actual_value = response.headers.get(header_name);
-                    if (actual_value == null or std.mem.indexOf(u8, actual_value.?, assertion.value) == null) {
-                        stderr.print("[Fail] Expected header \"{s}\" to contain \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
-                        return error.HeaderNotContains;
-                    }
-                } else {
-                    stderr.print("[Fail] Invalid assertion key for contains: {s}\n", .{assertion.key}) catch {};
-                    return error.InvalidAssertionKey;
-                }
-            },
-            .not_contains => {
-                if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
-                    var status_buf: [3]u8 = undefined;
-                    const status_code = @intFromEnum(response.status.?); // .? if status is optional
-                    const status_str = std.fmt.bufPrint(&status_buf, "{}", .{status_code}) catch return error.StatusCodeFormat;
-                    if (std.mem.indexOf(u8, status_str, assertion.value) != null) {
-                        stderr.print("[Fail] Expected status code to NOT contain \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
-                        return error.StatusCodeContainsButShouldnt;
-                    }
-                } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
-                    if (std.mem.indexOf(u8, response.body, assertion.value) != null) {
-                        stderr.print("[Fail] Expected body content to NOT contain \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
-                        return error.BodyContentContainsButShouldnt;
-                    }
-                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    const header_name = try extractHeaderName(assertion.key);
-                    const actual_value = response.headers.get(header_name);
-                    if (actual_value != null and std.mem.indexOf(u8, actual_value.?, assertion.value) != null) {
-                        stderr.print("[Fail] Expected header \"{s}\" to NOT contain \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
-                        return error.HeaderContainsButShouldnt;
-                    }
-                } else {
-                    stderr.print("[Fail] Invalid assertion key for contains: {s}\n", .{assertion.key}) catch {};
-                    return error.InvalidAssertionKey;
-                }
-            },
-            .starts_with => {
-                if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
-                    var status_buf: [3]u8 = undefined;
-                    const status_code = @intFromEnum(response.status.?);
-                    const status_str = std.fmt.bufPrint(&status_buf, "{}", .{status_code}) catch return error.StatusCodeFormat;
-                    if (!std.mem.startsWith(u8, status_str, assertion.value)) {
-                        stderr.print("[Fail] Expected status code to start with \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
-                        return error.StatusCodeNotStartsWith;
-                    }
-                } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
-                    if (!std.mem.startsWith(u8, response.body, assertion.value)) {
-                        stderr.print("[Fail] Expected body content to start with \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
-                        return error.BodyContentNotStartsWith;
-                    }
-                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    const header_name = try extractHeaderName(assertion.key);
-                    const actual_value = response.headers.get(header_name);
-                    if (actual_value == null or !std.mem.startsWith(u8, actual_value.?, assertion.value)) {
-                        stderr.print("[Fail] Expected header \"{s}\" to start with \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
-                        return error.HeaderNotStartsWith;
-                    }
-                } else {
-                    stderr.print("[Fail] Invalid assertion key for starts_with: {s}\n", .{assertion.key}) catch {};
-                    return error.InvalidAssertionKey;
-                }
-            },
-            .matches_regex => {
-                if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
-                    var status_buf: [3]u8 = undefined;
-                    const status_code = @intFromEnum(response.status.?);
-                    const status_str = std.fmt.bufPrint(&status_buf, "{}", .{status_code}) catch return error.StatusCodeFormat;
-                    if (!matchesRegex(status_str, assertion.value)) {
-                        stderr.print("[Fail] Expected status code to match regex \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
-                        return error.StatusCodeNotMatchesRegex;
-                    }
-                } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
-                    if (!matchesRegex(response.body, assertion.value)) {
-                        stderr.print("[Fail] Expected body content to match regex \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
-                        return error.BodyContentNotMatchesRegex;
-                    }
-                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    const header_name = try extractHeaderName(assertion.key);
-                    const actual_value = response.headers.get(header_name);
-                    if (actual_value == null or !matchesRegex(actual_value.?, assertion.value)) {
-                        stderr.print("[Fail] Expected header \"{s}\" to match regex \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
-                        return error.HeaderNotMatchesRegex;
-                    }
-                } else {
-                    stderr.print("[Fail] Invalid assertion key for matches_regex: {s}\n", .{assertion.key}) catch {};
-                    return error.InvalidAssertionKey;
-                }
-            },
-            .not_matches_regex => {
-                if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
-                    var status_buf: [3]u8 = undefined;
-                    const status_code = @intFromEnum(response.status.?);
-                    const status_str = std.fmt.bufPrint(&status_buf, "{}", .{status_code}) catch return error.StatusCodeFormat;
-                    if (matchesRegex(status_str, assertion.value)) {
-                        stderr.print("[Fail] Expected status code to NOT match regex \"{s}\", got \"{s}\"\n", .{ assertion.value, status_str }) catch {};
-                        return error.StatusCodeMatchesRegexButShouldnt;
-                    }
-                } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
-                    if (matchesRegex(response.body, assertion.value)) {
-                        stderr.print("[Fail] Expected body content to NOT match regex \"{s}\", got \"{s}\"\n", .{ assertion.value, response.body }) catch {};
-                        return error.BodyContentMatchesRegexButShouldnt;
-                    }
-                } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
-                    const header_name = try extractHeaderName(assertion.key);
-                    const actual_value = response.headers.get(header_name);
-                    if (actual_value != null and matchesRegex(actual_value.?, assertion.value)) {
-                        stderr.print("[Fail] Expected header \"{s}\" to NOT match regex \"{s}\", got \"{s}\"\n", .{ header_name, assertion.value, actual_value orelse "null" }) catch {};
-                        return error.HeaderMatchesRegexButShouldnt;
-                    }
-                } else {
-                    stderr.print("[Fail] Invalid assertion key for not_matches_regex: {s}\n", .{assertion.key}) catch {};
-                    return error.InvalidAssertionKey;
-                }
-            },
-            else => {},
-        }
+
+pub fn check(
+    request: *HttpParser.HttpRequest, 
+    response: Client.HttpResponse, 
+    diagnostic: *AssertionDiagnostic,
+    source_file: ?[]const u8,
+) void {
+    for (request.assertions.items, 0..) |assertion, index| {
+        checkAssertion(assertion, response, diagnostic, index, source_file) catch |err| {
+            diagnostic.addFailure(
+                assertion,
+                "N/A",
+                @errorName(err),
+                .status_format_error,
+                index,
+                source_file,
+            ) catch {};
+        };
     }
 }
 
-test "HttpParser parses assertions" {
+fn checkAssertion(
+    assertion: HttpParser.Assertion,
+    response: Client.HttpResponse,
+    diagnostic: *AssertionDiagnostic,
+    assertion_index: usize,
+    source_file: ?[]const u8,
+) !void {
+    switch (assertion.assertion_type) {
+        .equal => {
+            if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
+                const assert_status_code = try std.fmt.parseInt(u16, assertion.value, 10);
+                const expected_status = try std.meta.intToEnum(http.Status, assert_status_code);
+                if (response.status != expected_status) {
+                    const actual_str = try std.fmt.allocPrint(diagnostic.allocator, "{d}", .{@intFromEnum(response.status.?)});
+                    defer diagnostic.allocator.free(actual_str);
+                    try diagnostic.addFailure(assertion, assertion.value, actual_str, .status_mismatch, assertion_index, source_file);
+                }
+            } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
+                if (!std.mem.eql(u8, response.body, assertion.value)) {
+                    try diagnostic.addFailure(assertion, assertion.value, response.body, .body_mismatch, assertion_index, source_file);
+                }
+            } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                const header_name = assertion.key[8 .. assertion.key.len - 2];
+                const actual_value = response.headers.get(header_name);
+                if (actual_value == null) {
+                    try diagnostic.addFailure(assertion, assertion.value, "null", .header_missing, assertion_index, source_file);
+                } else if (!std.ascii.eqlIgnoreCase(actual_value.?, assertion.value)) {
+                    try diagnostic.addFailure(assertion, assertion.value, actual_value.?, .header_mismatch, assertion_index, source_file);
+                }
+            } else {
+                try diagnostic.addFailure(assertion, assertion.value, "N/A", .invalid_assertion_key, assertion_index, source_file);
+            }
+        },
+        .not_equal => {
+            if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
+                const assert_status_code = try std.fmt.parseInt(u16, assertion.value, 10);
+                const expected_status = try std.meta.intToEnum(http.Status, assert_status_code);
+                if (response.status == expected_status) {
+                    const actual_str = try std.fmt.allocPrint(diagnostic.allocator, "{d}", .{@intFromEnum(response.status.?)});
+                    defer diagnostic.allocator.free(actual_str);
+                    try diagnostic.addFailure(assertion, assertion.value, actual_str, .status_mismatch, assertion_index, source_file);
+                }
+            } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
+                if (std.mem.eql(u8, response.body, assertion.value)) {
+                    try diagnostic.addFailure(assertion, assertion.value, response.body, .body_mismatch, assertion_index, source_file);
+                }
+            } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                const header_name = assertion.key[8 .. assertion.key.len - 2];
+                const actual_value = response.headers.get(header_name);
+                if (actual_value != null and std.ascii.eqlIgnoreCase(actual_value.?, assertion.value)) {
+                    try diagnostic.addFailure(assertion, assertion.value, actual_value.?, .header_mismatch, assertion_index, source_file);
+                }
+            } else {
+                try diagnostic.addFailure(assertion, assertion.value, "N/A", .invalid_assertion_key, assertion_index, source_file);
+            }
+        },
+        .contains => {
+            if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
+                var status_buf: [3]u8 = undefined;
+                const status_code = @intFromEnum(response.status.?);
+                const status_str = try std.fmt.bufPrint(&status_buf, "{}", .{status_code});
+                if (std.mem.indexOf(u8, status_str, assertion.value) == null) {
+                    try diagnostic.addFailure(assertion, assertion.value, status_str, .contains_failed, assertion_index, source_file);
+                }
+            } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
+                if (std.mem.indexOf(u8, response.body, assertion.value) == null) {
+                    try diagnostic.addFailure(assertion, assertion.value, response.body, .contains_failed, assertion_index, source_file);
+                }
+            } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                const header_name = assertion.key[8 .. assertion.key.len - 2];
+                const actual_value = response.headers.get(header_name);
+                if (actual_value == null or std.mem.indexOf(u8, actual_value.?, assertion.value) == null) {
+                    try diagnostic.addFailure(assertion, assertion.value, actual_value orelse "null", .contains_failed, assertion_index, source_file);
+                }
+            } else {
+                try diagnostic.addFailure(assertion, assertion.value, "N/A", .invalid_assertion_key, assertion_index, source_file);
+            }
+        },
+        .not_contains => {
+            if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
+                var status_buf: [3]u8 = undefined;
+                const status_code = @intFromEnum(response.status.?);
+                const status_str = try std.fmt.bufPrint(&status_buf, "{}", .{status_code});
+                if (std.mem.indexOf(u8, status_str, assertion.value) != null) {
+                    try diagnostic.addFailure(assertion, assertion.value, status_str, .not_contains_failed, assertion_index, source_file);
+                }
+            } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
+                if (std.mem.indexOf(u8, response.body, assertion.value) != null) {
+                    try diagnostic.addFailure(assertion, assertion.value, response.body, .not_contains_failed, assertion_index, source_file);
+                }
+            } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                const header_name = assertion.key[8 .. assertion.key.len - 2];
+                const actual_value = response.headers.get(header_name);
+                if (actual_value != null and std.mem.indexOf(u8, actual_value.?, assertion.value) != null) {
+                    try diagnostic.addFailure(assertion, assertion.value, actual_value.?, .not_contains_failed, assertion_index, source_file);
+                }
+            } else {
+                try diagnostic.addFailure(assertion, assertion.value, "N/A", .invalid_assertion_key, assertion_index, source_file);
+            }
+        },
+        .matches_regex => {
+            if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
+                var status_buf: [3]u8 = undefined;
+                const status_code = @intFromEnum(response.status.?);
+                const status_str = try std.fmt.bufPrint(&status_buf, "{}", .{status_code});
+                if (!matchesRegex(status_str, assertion.value)) {
+                    try diagnostic.addFailure(assertion, assertion.value, status_str, .contains_failed, assertion_index, source_file);
+                }
+            } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
+                if (!matchesRegex(response.body, assertion.value)) {
+                    try diagnostic.addFailure(assertion, assertion.value, response.body, .contains_failed, assertion_index, source_file);
+                }
+            } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                const header_name = assertion.key[8 .. assertion.key.len - 2];
+                const actual_value = response.headers.get(header_name);
+                if (actual_value == null or !matchesRegex(actual_value.?, assertion.value)) {
+                    try diagnostic.addFailure(assertion, assertion.value, actual_value orelse "null", .contains_failed, assertion_index, source_file);
+                }
+            } else {
+                try diagnostic.addFailure(assertion, assertion.value, "N/A", .invalid_assertion_key, assertion_index, source_file);
+            }
+        },
+        .not_matches_regex => {
+            if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
+                var status_buf: [3]u8 = undefined;
+                const status_code = @intFromEnum(response.status.?);
+                const status_str = try std.fmt.bufPrint(&status_buf, "{}", .{status_code});
+                if (matchesRegex(status_str, assertion.value)) {
+                    try diagnostic.addFailure(assertion, assertion.value, status_str, .not_contains_failed, assertion_index, source_file);
+                }
+            } else if (std.ascii.eqlIgnoreCase(assertion.key, "body")) {
+                if (matchesRegex(response.body, assertion.value)) {
+                    try diagnostic.addFailure(assertion, assertion.value, response.body, .not_contains_failed, assertion_index, source_file);
+                }
+            } else if (std.mem.startsWith(u8, assertion.key, "header[\"")) {
+                const header_name = assertion.key[8 .. assertion.key.len - 2];
+                const actual_value = response.headers.get(header_name);
+                if (actual_value != null and matchesRegex(actual_value.?, assertion.value)) {
+                    try diagnostic.addFailure(assertion, assertion.value, actual_value.?, .not_contains_failed, assertion_index, source_file);
+                }
+            } else {
+                try diagnostic.addFailure(assertion, assertion.value, "N/A", .invalid_assertion_key, assertion_index, source_file);
+            }
+        },
+        else => {},
+    }
+}
+
+
+test "Assertion checker with diagnostics - all pass" {
     const allocator = std.testing.allocator;
 
     var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
@@ -218,7 +302,7 @@ test "HttpParser parses assertions" {
     try assertions.append(HttpParser.Assertion{
         .key = "status",
         .value = "200",
-        .assertion_type = .starts_with,
+        .assertion_type = .equal,
     });
 
     try assertions.append(HttpParser.Assertion{
@@ -233,7 +317,6 @@ test "HttpParser parses assertions" {
         .assertion_type = .equal,
     });
 
-    // TODO: This should also work with header[\"Content-Type\"] as the key
     try assertions.append(HttpParser.Assertion{
         .key = "header[\"content-type\"]",
         .value = "application/json",
@@ -261,10 +344,16 @@ test "HttpParser parses assertions" {
         .allocator = allocator,
     };
 
-    try check(&request, response);
+    var diagnostic = AssertionDiagnostic.init(allocator);
+    defer diagnostic.deinit();
+    
+    check(&request, response, &diagnostic, "test.httpspec");
+    
+    try std.testing.expect(!hasFailures(&diagnostic));
+    try std.testing.expectEqual(@as(usize, 0), diagnostic.failures.items.len);
 }
 
-test "HttpParser handles NotEquals" {
+test "Assertion checker with not_equal - all pass" {
     const allocator = std.testing.allocator;
 
     var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
@@ -282,7 +371,6 @@ test "HttpParser handles NotEquals" {
         .assertion_type = .not_equal,
     });
 
-    // TODO: This should also work with header[\"Content-Type\"] as the key
     try assertions.append(HttpParser.Assertion{
         .key = "header[\"content-type\"]",
         .value = "application/xml",
@@ -310,7 +398,71 @@ test "HttpParser handles NotEquals" {
         .allocator = allocator,
     };
 
-    try check(&request, response);
+    var diagnostic = AssertionDiagnostic.init(allocator);
+    defer diagnostic.deinit();
+    
+    check(&request, response, &diagnostic, "test.httpspec");
+    
+    try std.testing.expect(!hasFailures(&diagnostic));
+    try std.testing.expectEqual(@as(usize, 0), diagnostic.failures.items.len);
+}
+
+test "Assertion checker with failures - collects all failures" {
+    const allocator = std.testing.allocator;
+
+    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
+    defer assertions.deinit();
+
+    try assertions.append(HttpParser.Assertion{
+        .key = "status",
+        .value = "404",
+        .assertion_type = .equal,
+    });
+
+    try assertions.append(HttpParser.Assertion{
+        .key = "body",
+        .value = "Wrong body content",
+        .assertion_type = .equal,
+    });
+
+    try assertions.append(HttpParser.Assertion{
+        .key = "header[\"content-type\"]",
+        .value = "application/xml",
+        .assertion_type = .equal,
+    });
+
+    var request = HttpParser.HttpRequest{
+        .method = .GET,
+        .url = "https://api.example.com",
+        .headers = std.ArrayList(http.Header).init(allocator),
+        .assertions = assertions,
+        .body = null,
+    };
+
+    var response_headers = std.StringHashMap([]const u8).init(allocator);
+    try response_headers.put("content-type", "application/json");
+    defer response_headers.deinit();
+
+    const body = try allocator.dupe(u8, "Response body content");
+    defer allocator.free(body);
+    const response = Client.HttpResponse{
+        .status = http.Status.ok,
+        .headers = response_headers,
+        .body = body,
+        .allocator = allocator,
+    };
+
+    var diagnostic = AssertionDiagnostic.init(allocator);
+    defer diagnostic.deinit();
+    
+    check(&request, response, &diagnostic, "test.httpspec");
+    
+    try std.testing.expect(hasFailures(&diagnostic));
+    try std.testing.expectEqual(@as(usize, 3), diagnostic.failures.items.len);
+    
+    try std.testing.expectEqual(FailureReason.status_mismatch, diagnostic.failures.items[0].reason);
+    try std.testing.expectEqual(FailureReason.body_mismatch, diagnostic.failures.items[1].reason);
+    try std.testing.expectEqual(FailureReason.header_mismatch, diagnostic.failures.items[2].reason);
 }
 
 test "HttpParser supports starts_with for status, body, and header" {
@@ -358,7 +510,12 @@ test "HttpParser supports starts_with for status, body, and header" {
         .allocator = allocator,
     };
 
-    try check(&request, response);
+    var diagnostic = AssertionDiagnostic.init(allocator);
+    defer diagnostic.deinit();
+    
+    check(&request, response, &diagnostic, "test.httpspec");
+    
+    try std.testing.expect(!hasFailures(&diagnostic));
 }
 
 test "HttpParser supports matches_regex and not_matches_regex for status, body, and headers" {
@@ -416,7 +573,12 @@ test "HttpParser supports matches_regex and not_matches_regex for status, body, 
         .allocator = allocator,
     };
 
-    try check(&request, response);
+    var diagnostic = AssertionDiagnostic.init(allocator);
+    defer diagnostic.deinit();
+    
+    check(&request, response, &diagnostic, "test.httpspec");
+    
+    try std.testing.expect(!hasFailures(&diagnostic));
 }
 
 test "HttpParser supports contains and not_contains for headers" {
@@ -460,5 +622,10 @@ test "HttpParser supports contains and not_contains for headers" {
         .allocator = allocator,
     };
 
-    try check(&request, response);
+    var diagnostic = AssertionDiagnostic.init(allocator);
+    defer diagnostic.deinit();
+    
+    check(&request, response, &diagnostic, "test.httpspec");
+    
+    try std.testing.expect(!hasFailures(&diagnostic));
 }
