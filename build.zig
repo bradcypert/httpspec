@@ -27,26 +27,6 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    // Add WASM build target
-    const wasm = b.addExecutable(.{
-        .name = "httpspec",
-        .root_source_file = b.path("src/wasm.zig"),
-        .target = b.resolveTargetQuery(.{
-            .cpu_arch = .wasm32,
-            .os_tag = .freestanding,
-        }),
-        .optimize = optimize,
-    });
-
-    // Configure WASM-specific build options
-    wasm.entry = .disabled;
-    wasm.rdynamic = true;
-
-    const wasm_step = b.step("wasm", "Build WebAssembly module");
-    wasm_step.dependOn(&b.addInstallArtifact(wasm, .{
-        .dest_dir = .{ .override = .{ .custom = "web" } },
-    }).step);
-
     const run_cmd = b.addRunArtifact(exe);
 
     run_cmd.step.dependOn(b.getInstallStep());
