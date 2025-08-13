@@ -6,7 +6,7 @@ const ArrayList = std.ArrayList;
 
 const ParserState = enum { headers, body };
 
-const AssertionType = enum {
+pub const AssertionType = enum {
     equal,
     not_equal,
     contains,

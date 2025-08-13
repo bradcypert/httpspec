@@ -4,3 +4,10 @@ Accept: application/json
 
 //# status == 200
 //# body contains "Leanne Graham"
+
+### Test with some failing assertions (to show diagnostics)
+GET https://httpbin.org/json
+
+//# status == 404
+//# body contains "nonexistent"  
+//# header["content-type"] == "text/plain"

@@ -125,10 +125,14 @@ fn runTest(
             return;
         };
         defer responses.deinit();
-        AssertionChecker.check(owned_item, responses, std.io.getStdErr().writer()) catch {
+        var diagnostic = AssertionChecker.AssertionDiagnostic.init(allocator);
+        defer diagnostic.deinit();
+        AssertionChecker.check(owned_item, responses, &diagnostic, path);
+        if (AssertionChecker.hasFailures(&diagnostic)) {
+            AssertionChecker.reportFailures(&diagnostic, std.io.getStdErr().writer()) catch {};
             has_failure = true;
             break;
-        };
+        }
     }
     if (!has_failure) {
         reporter.incTestPass();
