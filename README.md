@@ -37,7 +37,7 @@ binary="httpspec_mac_x86"      # mac x86
 binary="httpspec_windows_x86"  # windows
 
 # curl, follow redirects, output to "httpspec", download target latest release
-curl -L -o adl https://github.com/bradcypert/httpspec/releases/latest/download/$binary
+curl -L -o httpspec https://github.com/bradcypert/httpspec/releases/latest/download/$binary
 
 # You _may_ need to update permissions for adl
 chmod 744 httpspec
