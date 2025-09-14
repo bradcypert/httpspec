@@ -57,39 +57,41 @@ pub const HttpClient = struct {
         }
 
         const uri = try Uri.parse(request.url);
-        var server_header_buf: [4096]u8 = undefined;
+        // var server_header_buf: [4096]u8 = undefined;
 
-        var req = try self.client.open(request.method.?, uri, .{
-            .server_header_buffer = &server_header_buf,
+        var req = try self.client.request(request.method.?, uri, .{
+            // .server_header_buffer = &server_header_buf,
             .extra_headers = request.headers.items,
         });
+
         defer req.deinit();
 
         if (request.body) |body| {
             req.transfer_encoding = .{ .content_length = body.len };
         }
 
-        try req.send();
-
         if (request.body) |body| {
-            try req.writeAll(body);
+            try req.sendBodyComplete(body);
+        } else {
+            try req.sendBodiless();
         }
 
-        try req.finish();
-        try req.wait();
+        var raw_response = try req.receiveHead(&.{});
 
         var response = HttpResponse.init(self.allocator);
-        response.status = req.response.status;
+        response.status = raw_response.head.status;
 
-        var header_iterator = req.response.iterateHeaders();
+        var header_iterator = raw_response.head.iterateHeaders();
         while (header_iterator.next()) |header| {
             const name = try self.allocator.dupe(u8, header.name);
             const value = try self.allocator.dupe(u8, header.value);
             try response.headers.put(name, value);
         }
 
-        const body_reader = req.reader();
-        response.body = try body_reader.readAllAlloc(self.allocator, std.math.maxInt(usize));
+        // Optimal size depends on how you will use the reader.
+        var reader_buffer: [100]u8 = undefined;
+        const body_reader = raw_response.reader(&reader_buffer);
+        response.body = try body_reader.adaptToOldInterface().readAllAlloc(self.allocator, std.math.maxInt(usize));
 
         return response;
     }

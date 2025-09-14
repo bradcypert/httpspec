@@ -40,17 +40,17 @@ pub const HttpRequest = struct {
     method: ?http.Method,
     url: []const u8,
     headers: ArrayList(http.Header),
-    body: ?[]const u8,
+    body: ?[]u8,
     assertions: ArrayList(Assertion),
     // TODO: Add a name for the request if needed.
 
-    pub fn init(allocator: Allocator) HttpRequest {
+    pub fn init() HttpRequest {
         return .{
             .method = null,
             .url = "",
-            .headers = ArrayList(http.Header).init(allocator),
+            .headers = .empty,
             .body = null,
-            .assertions = ArrayList(Assertion).init(allocator),
+            .assertions = .empty,
         };
     }
 
@@ -60,12 +60,12 @@ pub const HttpRequest = struct {
             if (assertion.key.len > 0) allocator.free(assertion.key);
             if (assertion.value.len > 0) allocator.free(assertion.value);
         }
-        self.assertions.deinit();
+        self.assertions.deinit(allocator);
         for (self.headers.items) |header| {
             if (header.name.len > 0) allocator.free(header.name);
             if (header.value.len > 0) allocator.free(header.value);
         }
-        self.headers.deinit();
+        self.headers.deinit(allocator);
         if (self.body) |body| {
             if (body.len > 0) allocator.free(body);
         }
@@ -81,18 +81,18 @@ pub fn parseFile(allocator: Allocator, file_path: []const u8) !ArrayList(HttpReq
 }
 
 pub fn parseContent(allocator: Allocator, content: []const u8) !ArrayList(HttpRequest) {
-    var requests = ArrayList(HttpRequest).init(allocator);
+    var requests: ArrayList(HttpRequest) = .empty;
     errdefer {
         for (requests.items) |*request| request.deinit(allocator);
-        requests.deinit();
+        requests.deinit(allocator);
     }
 
-    var current_request = HttpRequest.init(allocator);
+    var current_request = HttpRequest.init();
     errdefer current_request.deinit(allocator);
     var state: ?ParserState = null;
     var lines = std.mem.splitScalar(u8, content, '\n');
-    var body_buffer = ArrayList(u8).init(allocator);
-    defer body_buffer.deinit();
+    var body_buffer: ArrayList(u8) = .empty;
+    defer body_buffer.deinit(allocator);
 
     while (lines.next()) |line| {
         const trimmed_line = std.mem.trim(u8, line, &std.ascii.whitespace);
@@ -106,8 +106,8 @@ pub fn parseContent(allocator: Allocator, content: []const u8) !ArrayList(HttpRe
                     current_request.body = try allocator.dupe(u8, body_buffer.items);
                     body_buffer.clearRetainingCapacity();
                 }
-                try requests.append(current_request);
-                current_request = HttpRequest.init(allocator);
+                try requests.append(allocator, current_request);
+                current_request = HttpRequest.init();
                 state = null;
             }
             continue;
@@ -125,7 +125,7 @@ pub fn parseContent(allocator: Allocator, content: []const u8) !ArrayList(HttpRe
                 .assertion_type = assertion_type,
             };
             if (assertion.key.len == 0 or assertion.value.len == 0) return error.InvalidAssertionFormat;
-            try current_request.assertions.append(assertion);
+            try current_request.assertions.append(allocator, assertion);
             continue;
         }
         if (std.mem.startsWith(u8, trimmed_line, "#") or std.mem.startsWith(u8, trimmed_line, "//")) {
@@ -144,7 +144,7 @@ pub fn parseContent(allocator: Allocator, content: []const u8) !ArrayList(HttpRe
             if (std.mem.indexOf(u8, trimmed_line, ":")) |colon_pos| {
                 const header_name = std.mem.trim(u8, trimmed_line[0..colon_pos], &std.ascii.whitespace);
                 const header_value = std.mem.trim(u8, trimmed_line[colon_pos + 1 ..], &std.ascii.whitespace);
-                try current_request.headers.append(http.Header{
+                try current_request.headers.append(allocator, http.Header{
                     .name = try allocator.dupe(u8, header_name),
                     .value = try allocator.dupe(u8, header_value),
                 });
@@ -154,8 +154,8 @@ pub fn parseContent(allocator: Allocator, content: []const u8) !ArrayList(HttpRe
             continue;
         }
         if (state == .body) {
-            try body_buffer.appendSlice(trimmed_line);
-            try body_buffer.append('\n');
+            try body_buffer.appendSlice(allocator, trimmed_line);
+            try body_buffer.append(allocator, '\n');
             continue;
         }
     }
@@ -163,7 +163,7 @@ pub fn parseContent(allocator: Allocator, content: []const u8) !ArrayList(HttpRe
         if (state == .body and body_buffer.items.len > 0) {
             current_request.body = try allocator.dupe(u8, body_buffer.items);
         }
-        try requests.append(current_request);
+        try requests.append(allocator, current_request);
     }
     return requests;
 }
