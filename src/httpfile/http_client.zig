@@ -91,7 +91,7 @@ pub const HttpClient = struct {
         // Optimal size depends on how you will use the reader.
         var reader_buffer: [100]u8 = undefined;
         const body_reader = raw_response.reader(&reader_buffer);
-        response.body = try body_reader.adaptToOldInterface().readAllAlloc(self.allocator, std.math.maxInt(usize));
+        response.body = try body_reader.allocRemaining(self.allocator, .limited(std.math.maxInt(usize)));
 
         return response;
     }
