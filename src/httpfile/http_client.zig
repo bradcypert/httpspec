@@ -57,40 +57,51 @@ pub const HttpClient = struct {
         }
 
         const uri = try Uri.parse(request.url);
-        var server_header_buf: [4096]u8 = undefined;
 
-        var req = try self.client.open(request.method.?, uri, .{
-            .server_header_buffer = &server_header_buf,
+        var req = try self.client.request(request.method.?, uri, .{
             .extra_headers = request.headers.items,
         });
+
         defer req.deinit();
 
         if (request.body) |body| {
             req.transfer_encoding = .{ .content_length = body.len };
         }
 
-        try req.send();
-
         if (request.body) |body| {
-            try req.writeAll(body);
+            var b = try req.sendBodyUnflushed(&.{});
+            try b.writer.writeAll(body);
+            try b.end();
+            try req.connection.?.flush();
+        } else {
+            try req.sendBodiless();
         }
 
-        try req.finish();
-        try req.wait();
+        var raw_response = try req.receiveHead(&.{});
 
         var response = HttpResponse.init(self.allocator);
-        response.status = req.response.status;
+        response.status = raw_response.head.status;
 
-        var header_iterator = req.response.iterateHeaders();
+        var header_iterator = raw_response.head.iterateHeaders();
         while (header_iterator.next()) |header| {
             const name = try self.allocator.dupe(u8, header.name);
             const value = try self.allocator.dupe(u8, header.value);
             try response.headers.put(name, value);
         }
 
-        const body_reader = req.reader();
-        response.body = try body_reader.readAllAlloc(self.allocator, std.math.maxInt(usize));
+        const decompress_buffer: []u8 = switch (raw_response.head.content_encoding) {
+            .identity => &.{},
+            .zstd => try self.allocator.alloc(u8, std.compress.zstd.default_window_len),
+            .deflate, .gzip => try self.allocator.alloc(u8, std.compress.flate.max_window_len),
+            .compress => return error.UnsupportedCompressionMethod,
+        };
+        defer self.allocator.free(decompress_buffer);
+        var transfer_buffer: [64]u8 = undefined;
+        var decompress: http.Decompress = undefined;
+        const reader = raw_response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
 
+        // Optimal size depends on how you will use the reader.
+        response.body = try reader.allocRemaining(self.allocator, .unlimited);
         return response;
     }
 
@@ -128,7 +139,7 @@ test "HttpClient basic functionality" {
     var client = HttpClient.init(allocator);
     defer client.deinit();
 
-    var request = httpfiles.HttpRequest.init(allocator);
+    var request = httpfiles.HttpRequest.init();
     defer request.deinit(allocator);
 
     request.method = .GET;

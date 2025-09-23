@@ -28,7 +28,7 @@
 
     // Tracks the earliest Zig version that the package considers to be a
     // supported use case.
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.15.1",
 
     // This field is optional.
     // Each dependency must either provide a `url` and `hash`, or a `path`.
@@ -37,12 +37,12 @@
     // internet connectivity.
     .dependencies = .{
         .clap = .{
-            .url = "git+https://github.com/Hejsil/zig-clap#cc5c6a5d71a317ed4b0ad776842d1d0655f72d0a",
-            .hash = "clap-0.10.0-oBajB7jkAQAZ4cKLlzkeV9mDu2yGZvtN2QuOyfAfjBij",
+            .url = "git+https://github.com/Hejsil/zig-clap#5289e0753cd274d65344bef1c114284c633536ea",
+            .hash = "clap-0.11.0-oBajB-HnAQDPCKYzwF7rO3qDFwRcD39Q0DALlTSz5H7e",
         },
         .regex = .{
-            .url = "git+https://github.com/tiehuis/zig-regex/?ref=HEAD#88105ccfb6d679111b91d798d97cd4eb95617452",
-            .hash = "regex-0.1.2-axC356XdAQCrReHJQmJLbCDBoYVvzj8y-wE1PXUjT4V6",
+            .url = "git+https://github.com/bradcypert/zig-regex.git#05f641c08939f131bb82195855efa7afaf7566eb",
+            .hash = "regex-0.1.2-axC350bnAQCyrPkH2IEfri8hebJO6IujGY1rhcgZBXpL",
         },
     },
     .paths = .{

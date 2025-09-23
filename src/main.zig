@@ -12,6 +12,16 @@ pub fn main() !void {
     defer _ = debug.deinit();
     const allocator = debug.allocator();
 
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
+
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
+    defer stderr.flush() catch {};
+
     // Determine thread count from environment.
     const threads = std.process.parseEnvVarInt("HTTP_THREAD_COUNT", usize, 10) catch 1;
 
@@ -25,7 +35,7 @@ pub fn main() !void {
         .diagnostic = &diag,
         .allocator = allocator,
     }) catch |err| {
-        diag.report(std.io.getStdErr().writer(), err) catch {};
+        diag.report(stderr, err) catch {};
         return err;
     };
     defer res.deinit();
@@ -36,10 +46,10 @@ pub fn main() !void {
     }
 
     // Discover all HTTP spec files to run.
-    var files = std.ArrayList([]const u8).init(allocator);
+    var files: std.ArrayList([]const u8) = .empty;
     defer {
         for (files.items) |file| allocator.free(file);
-        files.deinit();
+        files.deinit(allocator);
     }
     try collectSpecFiles(allocator, &files, res);
 
@@ -56,12 +66,12 @@ pub fn main() !void {
 
     // Run all tests in parallel.
     for (files.items) |path| {
-        pool.spawnWg(&wg, runTest, .{ allocator, &reporter, path });
+        pool.spawnWg(&wg, runTest, .{ allocator, &reporter, path, stderr });
     }
     wg.wait();
 
     // Print summary.
-    reporter.report(std.io.getStdOut().writer());
+    reporter.report(stdout);
 }
 
 /// Collects all HTTP spec files to run, based on CLI args.
@@ -74,20 +84,20 @@ fn collectSpecFiles(
         // No args: find all .http/.httpspec files recursively from cwd.
         const http_files = try listHttpFiles(allocator, ".");
         defer allocator.free(http_files);
-        for (http_files) |file| try files.append(file);
+        for (http_files) |file| try files.append(allocator, file);
     } else {
         // Args: treat as files or directories.
         for (res.positionals[0]) |pos| {
             if (std.ascii.eqlIgnoreCase(std.fs.path.extension(pos), ".http") or
                 std.ascii.eqlIgnoreCase(std.fs.path.extension(pos), ".httpspec"))
             {
-                try files.append(pos);
+                try files.append(allocator, pos);
             } else {
                 const file_info = try std.fs.cwd().statFile(pos);
                 if (file_info.kind != .directory) return error.InvalidPositionalArgument;
                 const http_files = try listHttpFiles(allocator, pos);
                 defer allocator.free(http_files);
-                for (http_files) |file| try files.append(file);
+                for (http_files) |file| try files.append(allocator, file);
             }
         }
     }
@@ -98,6 +108,7 @@ fn runTest(
     base_allocator: std.mem.Allocator,
     reporter: *TestReporter.BasicReporter,
     path: []const u8,
+    stderr: *std.io.Writer,
 ) void {
     // Create arena allocator for this test to provide memory isolation
     var arena = std.heap.ArenaAllocator.init(base_allocator);
@@ -112,7 +123,7 @@ fn runTest(
         std.debug.print("Failed to parse file {s}: {s}\n", .{ path, @errorName(err) });
         return;
     };
-    const owned_items = items.toOwnedSlice() catch |err| {
+    const owned_items = items.toOwnedSlice(allocator) catch |err| {
         reporter.incTestInvalid();
         std.debug.print("Failed to convert items to owned slice in file {s}: {s}\n", .{ path, @errorName(err) });
         return;
@@ -134,7 +145,7 @@ fn runTest(
         defer diagnostic.deinit();
         AssertionChecker.check(owned_item, responses, &diagnostic, path);
         if (AssertionChecker.hasFailures(&diagnostic)) {
-            AssertionChecker.reportFailures(&diagnostic, std.io.getStdErr().writer()) catch {};
+            AssertionChecker.reportFailures(&diagnostic, stderr) catch {};
             has_failure = true;
             break;
         }
@@ -148,8 +159,8 @@ fn runTest(
 
 /// Recursively finds all .http/.httpspec files in a directory.
 fn listHttpFiles(allocator: std.mem.Allocator, dir: []const u8) ![][]const u8 {
-    var files = std.ArrayList([]const u8).init(allocator);
-    defer files.deinit();
+    var files: std.ArrayList([]const u8) = .empty;
+    defer files.deinit(allocator);
 
     var dir_entry = try std.fs.cwd().openDir(dir, .{});
     defer dir_entry.close();
@@ -162,13 +173,13 @@ fn listHttpFiles(allocator: std.mem.Allocator, dir: []const u8) ![][]const u8 {
             defer allocator.free(subdir);
             const sub_files = try listHttpFiles(allocator, subdir);
             defer allocator.free(sub_files);
-            for (sub_files) |file| try files.append(file);
+            for (sub_files) |file| try files.append(allocator, file);
         } else if (std.mem.eql(u8, std.fs.path.extension(entry.name), ".http") or
             std.mem.eql(u8, std.fs.path.extension(entry.name), ".httpspec"))
         {
             const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir, entry.name });
-            try files.append(file_path);
+            try files.append(allocator, file_path);
         }
     }
-    return files.toOwnedSlice();
+    return files.toOwnedSlice(allocator);
 }

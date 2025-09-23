@@ -46,26 +46,32 @@ pub fn build(b: *std.Build) void {
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
     // Automatically find all Zig files in src/ and subdirectories and add test steps for each
-    var zig_files = std.ArrayList([]const u8).init(b.allocator);
-    defer zig_files.deinit();
+    var zig_files: std.ArrayList([]const u8) = .empty;
+    defer zig_files.deinit(b.allocator);
     findZigFiles(b, &zig_files, "src") catch unreachable;
 
-    var test_run_steps = std.ArrayList(*std.Build.Step).init(b.allocator);
-    defer test_run_steps.deinit();
+    var test_run_steps: std.ArrayList(*std.Build.Step) = .empty;
+    defer test_run_steps.deinit(b.allocator);
 
     for (zig_files.items) |zig_file| {
         // Skip main.zig since it's already covered by exe_unit_tests
         if (std.mem.endsWith(u8, zig_file, "/main.zig")) continue;
-        const test_artifact = b.addTest(.{ .root_source_file = b.path(zig_file), .target = target, .optimize = optimize });
-        
+        const test_artifact = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(zig_file),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+
         // Add dependencies to individual test artifacts
         for (dependencies) |dependency| {
             const dep = b.dependency(dependency, .{});
             test_artifact.root_module.addImport(dependency, dep.module(dependency));
         }
-        
+
         const run_test = b.addRunArtifact(test_artifact);
-        test_run_steps.append(&run_test.step) catch unreachable;
+        test_run_steps.append(b.allocator, &run_test.step) catch unreachable;
     }
 
     const test_step = b.step("test", "Run unit tests");
@@ -82,7 +88,7 @@ fn findZigFiles(b: *std.Build, files: *std.ArrayList([]const u8), dir_path: []co
     while (try it.next()) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
             const full_path = try std.fs.path.join(b.allocator, &[_][]const u8{ dir_path, entry.name });
-            try files.append(full_path);
+            try files.append(b.allocator, full_path);
         } else if (entry.kind == .directory and !std.mem.eql(u8, entry.name, ".") and !std.mem.eql(u8, entry.name, "..")) {
             const subdir = try std.fs.path.join(b.allocator, &[_][]const u8{ dir_path, entry.name });
             defer b.allocator.free(subdir);

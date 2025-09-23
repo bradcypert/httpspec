@@ -45,7 +45,7 @@ pub const AssertionDiagnostic = struct {
 
     pub fn init(allocator: Allocator) AssertionDiagnostic {
         return .{
-            .failures = ArrayList(AssertionFailure).init(allocator),
+            .failures = .empty,
             .allocator = allocator,
         };
     }
@@ -54,7 +54,7 @@ pub const AssertionDiagnostic = struct {
         for (self.failures.items) |*failure| {
             failure.deinit(self.allocator);
         }
-        self.failures.deinit();
+        self.failures.deinit(self.allocator);
     }
 
     pub fn addFailure(
@@ -76,7 +76,7 @@ pub const AssertionDiagnostic = struct {
             .assertion_index = assertion_index,
             .source_file = if (source_file) |file| try self.allocator.dupe(u8, file) else null,
         };
-        try self.failures.append(failure);
+        try self.failures.append(self.allocator, failure);
     }
 };
 
@@ -86,16 +86,16 @@ pub fn hasFailures(diagnostic: *const AssertionDiagnostic) bool {
 
 pub fn reportFailures(diagnostic: *const AssertionDiagnostic, writer: anytype) !void {
     for (diagnostic.failures.items) |failure| {
-        const source_info = if (failure.source_file) |file| 
+        const source_info = if (failure.source_file) |file|
             try std.fmt.allocPrint(diagnostic.allocator, " in {s}:{d}", .{ file, failure.assertion_index + 1 })
-        else 
-            try std.fmt.allocPrint(diagnostic.allocator, " (assertion #{d})", .{ failure.assertion_index + 1 });
+        else
+            try std.fmt.allocPrint(diagnostic.allocator, " (assertion #{d})", .{failure.assertion_index + 1});
         defer diagnostic.allocator.free(source_info);
 
         switch (failure.reason) {
             .status_mismatch => try writer.print("[Fail]{s} Expected status {s}, got {s}\n", .{ source_info, failure.expected, failure.actual }),
-            .header_mismatch => try writer.print("[Fail]{s} Expected header \"{s}\" to be \"{s}\", got \"{s}\"\n", .{ source_info, failure.assertion_key[8..failure.assertion_key.len-2], failure.expected, failure.actual }),
-            .header_missing => try writer.print("[Fail]{s} Expected header \"{s}\" to be \"{s}\", but header was missing\n", .{ source_info, failure.assertion_key[8..failure.assertion_key.len-2], failure.expected }),
+            .header_mismatch => try writer.print("[Fail]{s} Expected header \"{s}\" to be \"{s}\", got \"{s}\"\n", .{ source_info, failure.assertion_key[8 .. failure.assertion_key.len - 2], failure.expected, failure.actual }),
+            .header_missing => try writer.print("[Fail]{s} Expected header \"{s}\" to be \"{s}\", but header was missing\n", .{ source_info, failure.assertion_key[8 .. failure.assertion_key.len - 2], failure.expected }),
             .body_mismatch => try writer.print("[Fail]{s} Expected body \"{s}\", got \"{s}\"\n", .{ source_info, failure.expected, failure.actual }),
             .contains_failed => try writer.print("[Fail]{s} Expected {s} to contain \"{s}\", got \"{s}\"\n", .{ source_info, failure.assertion_key, failure.expected, failure.actual }),
             .not_contains_failed => try writer.print("[Fail]{s} Expected {s} to NOT contain \"{s}\", got \"{s}\"\n", .{ source_info, failure.assertion_key, failure.expected, failure.actual }),
@@ -123,10 +123,9 @@ fn matchesRegex(text: []const u8, pattern: []const u8) bool {
     return compiled_regex.match(text) catch return false;
 }
 
-
 pub fn check(
-    request: *HttpParser.HttpRequest, 
-    response: Client.HttpResponse, 
+    request: *HttpParser.HttpRequest,
+    response: Client.HttpResponse,
     diagnostic: *AssertionDiagnostic,
     source_file: ?[]const u8,
 ) void {
@@ -292,32 +291,31 @@ fn checkAssertion(
     }
 }
 
-
 test "Assertion checker with diagnostics - all pass" {
     const allocator = std.testing.allocator;
 
-    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
-    defer assertions.deinit();
+    var assertions: std.ArrayList(HttpParser.Assertion) = .empty;
+    defer assertions.deinit(allocator);
 
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "status",
         .value = "200",
         .assertion_type = .equal,
     });
 
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "body",
         .value = "body content",
         .assertion_type = .contains,
     });
 
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "body",
         .value = "Response body content",
         .assertion_type = .equal,
     });
 
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "header[\"content-type\"]",
         .value = "application/json",
         .assertion_type = .equal,
@@ -326,7 +324,7 @@ test "Assertion checker with diagnostics - all pass" {
     var request = HttpParser.HttpRequest{
         .method = .GET,
         .url = "https://api.example.com",
-        .headers = std.ArrayList(http.Header).init(allocator),
+        .headers = .empty,
         .assertions = assertions,
         .body = null,
     };
@@ -346,9 +344,9 @@ test "Assertion checker with diagnostics - all pass" {
 
     var diagnostic = AssertionDiagnostic.init(allocator);
     defer diagnostic.deinit();
-    
+
     check(&request, response, &diagnostic, "test.httpspec");
-    
+
     try std.testing.expect(!hasFailures(&diagnostic));
     try std.testing.expectEqual(@as(usize, 0), diagnostic.failures.items.len);
 }
@@ -356,22 +354,22 @@ test "Assertion checker with diagnostics - all pass" {
 test "Assertion checker with not_equal - all pass" {
     const allocator = std.testing.allocator;
 
-    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
-    defer assertions.deinit();
+    var assertions: std.ArrayList(HttpParser.Assertion) = .empty;
+    defer assertions.deinit(allocator);
 
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "status",
         .value = "400",
         .assertion_type = .not_equal,
     });
 
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "body",
         .value = "Response body content!!!",
         .assertion_type = .not_equal,
     });
 
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "header[\"content-type\"]",
         .value = "application/xml",
         .assertion_type = .not_equal,
@@ -380,7 +378,7 @@ test "Assertion checker with not_equal - all pass" {
     var request = HttpParser.HttpRequest{
         .method = .GET,
         .url = "https://api.example.com",
-        .headers = std.ArrayList(http.Header).init(allocator),
+        .headers = .empty,
         .assertions = assertions,
         .body = null,
     };
@@ -400,9 +398,9 @@ test "Assertion checker with not_equal - all pass" {
 
     var diagnostic = AssertionDiagnostic.init(allocator);
     defer diagnostic.deinit();
-    
+
     check(&request, response, &diagnostic, "test.httpspec");
-    
+
     try std.testing.expect(!hasFailures(&diagnostic));
     try std.testing.expectEqual(@as(usize, 0), diagnostic.failures.items.len);
 }
@@ -410,22 +408,22 @@ test "Assertion checker with not_equal - all pass" {
 test "Assertion checker with failures - collects all failures" {
     const allocator = std.testing.allocator;
 
-    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
-    defer assertions.deinit();
+    var assertions: std.ArrayList(HttpParser.Assertion) = .empty;
+    defer assertions.deinit(allocator);
 
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "status",
         .value = "404",
         .assertion_type = .equal,
     });
 
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "body",
         .value = "Wrong body content",
         .assertion_type = .equal,
     });
 
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "header[\"content-type\"]",
         .value = "application/xml",
         .assertion_type = .equal,
@@ -434,7 +432,7 @@ test "Assertion checker with failures - collects all failures" {
     var request = HttpParser.HttpRequest{
         .method = .GET,
         .url = "https://api.example.com",
-        .headers = std.ArrayList(http.Header).init(allocator),
+        .headers = .empty,
         .assertions = assertions,
         .body = null,
     };
@@ -454,12 +452,12 @@ test "Assertion checker with failures - collects all failures" {
 
     var diagnostic = AssertionDiagnostic.init(allocator);
     defer diagnostic.deinit();
-    
+
     check(&request, response, &diagnostic, "test.httpspec");
-    
+
     try std.testing.expect(hasFailures(&diagnostic));
     try std.testing.expectEqual(@as(usize, 3), diagnostic.failures.items.len);
-    
+
     try std.testing.expectEqual(FailureReason.status_mismatch, diagnostic.failures.items[0].reason);
     try std.testing.expectEqual(FailureReason.body_mismatch, diagnostic.failures.items[1].reason);
     try std.testing.expectEqual(FailureReason.header_mismatch, diagnostic.failures.items[2].reason);
@@ -467,23 +465,23 @@ test "Assertion checker with failures - collects all failures" {
 
 test "HttpParser supports starts_with for status, body, and header" {
     const allocator = std.testing.allocator;
-    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
-    defer assertions.deinit();
+    var assertions: std.ArrayList(HttpParser.Assertion) = .empty;
+    defer assertions.deinit(allocator);
 
     // Status starts with "2"
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "status",
         .value = "2",
         .assertion_type = .starts_with,
     });
     // Body starts with "Hello"
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "body",
         .value = "Hello",
         .assertion_type = .starts_with,
     });
     // Header starts with "application"
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "header[\"content-type\"]",
         .value = "application",
         .assertion_type = .starts_with,
@@ -492,7 +490,7 @@ test "HttpParser supports starts_with for status, body, and header" {
     var request = HttpParser.HttpRequest{
         .method = .GET,
         .url = "https://api.example.com",
-        .headers = std.ArrayList(http.Header).init(allocator),
+        .headers = .empty,
         .assertions = assertions,
         .body = null,
     };
@@ -512,41 +510,41 @@ test "HttpParser supports starts_with for status, body, and header" {
 
     var diagnostic = AssertionDiagnostic.init(allocator);
     defer diagnostic.deinit();
-    
+
     check(&request, response, &diagnostic, "test.httpspec");
-    
+
     try std.testing.expect(!hasFailures(&diagnostic));
 }
 
 test "HttpParser supports matches_regex and not_matches_regex for status, body, and headers" {
     const allocator = std.testing.allocator;
 
-    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
-    defer assertions.deinit();
+    var assertions: std.ArrayList(HttpParser.Assertion) = .empty;
+    defer assertions.deinit(allocator);
 
     // Should pass: status matches regex for 2xx codes
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "status",
         .value = "^2.*",
         .assertion_type = .matches_regex,
     });
 
     // Should pass: body matches regex for JSON-like content
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "body",
         .value = ".*success.*",
         .assertion_type = .matches_regex,
     });
 
     // Should pass: header matches regex for application/* content types
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "header[\"content-type\"]",
         .value = "application/.*",
         .assertion_type = .matches_regex,
     });
 
     // Should pass: status does not match regex for error codes
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "status",
         .value = "^[45].*",
         .assertion_type = .not_matches_regex,
@@ -555,7 +553,7 @@ test "HttpParser supports matches_regex and not_matches_regex for status, body, 
     var request = HttpParser.HttpRequest{
         .method = .GET,
         .url = "https://api.example.com",
-        .headers = std.ArrayList(http.Header).init(allocator),
+        .headers = .empty,
         .assertions = assertions,
         .body = null,
     };
@@ -575,27 +573,27 @@ test "HttpParser supports matches_regex and not_matches_regex for status, body, 
 
     var diagnostic = AssertionDiagnostic.init(allocator);
     defer diagnostic.deinit();
-    
+
     check(&request, response, &diagnostic, "test.httpspec");
-    
+
     try std.testing.expect(!hasFailures(&diagnostic));
 }
 
 test "HttpParser supports contains and not_contains for headers" {
     const allocator = std.testing.allocator;
 
-    var assertions = std.ArrayList(HttpParser.Assertion).init(allocator);
-    defer assertions.deinit();
+    var assertions: std.ArrayList(HttpParser.Assertion) = .empty;
+    defer assertions.deinit(allocator);
 
     // Should pass: header contains "json"
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "header[\"content-type\"]",
         .value = "json",
         .assertion_type = .contains,
     });
 
     // Should pass: header does not contain "xml"
-    try assertions.append(HttpParser.Assertion{
+    try assertions.append(allocator, HttpParser.Assertion{
         .key = "header[\"content-type\"]",
         .value = "xml",
         .assertion_type = .not_contains,
@@ -604,7 +602,7 @@ test "HttpParser supports contains and not_contains for headers" {
     var request = HttpParser.HttpRequest{
         .method = .GET,
         .url = "https://api.example.com",
-        .headers = std.ArrayList(http.Header).init(allocator),
+        .headers = .empty,
         .assertions = assertions,
         .body = null,
     };
@@ -624,8 +622,8 @@ test "HttpParser supports contains and not_contains for headers" {
 
     var diagnostic = AssertionDiagnostic.init(allocator);
     defer diagnostic.deinit();
-    
+
     check(&request, response, &diagnostic, "test.httpspec");
-    
+
     try std.testing.expect(!hasFailures(&diagnostic));
 }
