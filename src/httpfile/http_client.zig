@@ -57,10 +57,8 @@ pub const HttpClient = struct {
         }
 
         const uri = try Uri.parse(request.url);
-        // var server_header_buf: [4096]u8 = undefined;
 
         var req = try self.client.request(request.method.?, uri, .{
-            // .server_header_buffer = &server_header_buf,
             .extra_headers = request.headers.items,
         });
 
@@ -71,7 +69,10 @@ pub const HttpClient = struct {
         }
 
         if (request.body) |body| {
-            try req.sendBodyComplete(body);
+            var b = try req.sendBodyUnflushed(&.{});
+            try b.writer.writeAll(body);
+            try b.end();
+            try req.connection.?.flush();
         } else {
             try req.sendBodiless();
         }
@@ -83,16 +84,25 @@ pub const HttpClient = struct {
 
         var header_iterator = raw_response.head.iterateHeaders();
         while (header_iterator.next()) |header| {
+            std.debug.print("{s}, {s}\n", .{ header.name, header.value });
             const name = try self.allocator.dupe(u8, header.name);
             const value = try self.allocator.dupe(u8, header.value);
             try response.headers.put(name, value);
         }
 
-        // Optimal size depends on how you will use the reader.
-        var reader_buffer: [100]u8 = undefined;
-        const body_reader = raw_response.reader(&reader_buffer);
-        response.body = try body_reader.allocRemaining(self.allocator, .limited(std.math.maxInt(usize)));
+        const decompress_buffer: []u8 = switch (raw_response.head.content_encoding) {
+            .identity => &.{},
+            .zstd => try self.allocator.alloc(u8, std.compress.zstd.default_window_len),
+            .deflate, .gzip => try self.allocator.alloc(u8, std.compress.flate.max_window_len),
+            .compress => return error.UnsupportedCompressionMethod,
+        };
+        defer self.allocator.free(decompress_buffer);
+        var transfer_buffer: [64]u8 = undefined;
+        var decompress: http.Decompress = undefined;
+        const reader = raw_response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
 
+        // Optimal size depends on how you will use the reader.
+        response.body = try reader.allocRemaining(self.allocator, .unlimited);
         return response;
     }
 
