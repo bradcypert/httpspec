@@ -84,7 +84,6 @@ pub const HttpClient = struct {
 
         var header_iterator = raw_response.head.iterateHeaders();
         while (header_iterator.next()) |header| {
-            std.debug.print("{s}, {s}\n", .{ header.name, header.value });
             const name = try self.allocator.dupe(u8, header.name);
             const value = try self.allocator.dupe(u8, header.value);
             try response.headers.put(name, value);
@@ -140,7 +139,7 @@ test "HttpClient basic functionality" {
     var client = HttpClient.init(allocator);
     defer client.deinit();
 
-    var request = httpfiles.HttpRequest.init(allocator);
+    var request = httpfiles.HttpRequest.init();
     defer request.deinit(allocator);
 
     request.method = .GET;

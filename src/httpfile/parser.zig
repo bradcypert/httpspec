@@ -191,7 +191,7 @@ test "HttpParser from String Contents" {
         for (requests.items) |*request| {
             request.deinit(std.testing.allocator);
         }
-        requests.deinit();
+        requests.deinit(std.testing.allocator);
     }
 
     try std.testing.expectEqual(http.Method.GET, requests.items[0].method);
@@ -220,7 +220,7 @@ test "HttpParser parses assertions" {
         for (requests.items) |*request| {
             request.deinit(std.testing.allocator);
         }
-        requests.deinit();
+        requests.deinit(std.testing.allocator);
     }
 
     try std.testing.expectEqual(http.Method.GET, requests.items[0].method);
