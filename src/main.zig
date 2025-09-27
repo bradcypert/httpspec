@@ -162,7 +162,7 @@ fn listHttpFiles(allocator: std.mem.Allocator, dir: []const u8) ![][]const u8 {
     var files: std.ArrayList([]const u8) = .empty;
     defer files.deinit(allocator);
 
-    var dir_entry = try std.fs.cwd().openDir(dir, .{});
+    var dir_entry = try std.fs.cwd().openDir(dir, .{ .iterate = true });
     defer dir_entry.close();
 
     var it = dir_entry.iterate();
