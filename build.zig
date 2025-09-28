@@ -5,6 +5,7 @@ pub fn build(b: *std.Build) void {
     const dependencies = [_][]const u8{
         "clap",
         "regex",
+        "curl",
     };
 
     const target = b.standardTargetOptions(.{});
@@ -25,6 +26,8 @@ pub fn build(b: *std.Build) void {
         const dep = b.dependency(dependency, .{});
         exe.root_module.addImport(dependency, dep.module(dependency));
     }
+
+    exe.linkLibC();
 
     b.installArtifact(exe);
 

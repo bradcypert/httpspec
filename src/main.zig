@@ -91,7 +91,7 @@ fn collectSpecFiles(
             if (std.ascii.eqlIgnoreCase(std.fs.path.extension(pos), ".http") or
                 std.ascii.eqlIgnoreCase(std.fs.path.extension(pos), ".httpspec"))
             {
-                try files.append(allocator, pos);
+                try files.append(allocator, try allocator.dupe(u8, pos));
             } else {
                 const file_info = try std.fs.cwd().statFile(pos);
                 if (file_info.kind != .directory) return error.InvalidPositionalArgument;

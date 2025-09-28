@@ -37,6 +37,7 @@ pub const Assertion = struct {
 };
 
 pub const HttpRequest = struct {
+    // TODO: Null HTTP METHOD SHOULD NOT BE CRITICAL TO PROPERLY PARSING
     method: ?http.Method,
     url: []const u8,
     headers: ArrayList(http.Header),

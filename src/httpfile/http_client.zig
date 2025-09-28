@@ -1,4 +1,5 @@
 const std = @import("std");
+const curl = @import("curl");
 const http = std.http;
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
@@ -50,58 +51,67 @@ pub const HttpClient = struct {
         self.client.deinit();
     }
 
+    fn map_method_for_curl(method: std.http.Method) !curl.Easy.Method {
+        return switch (method) {
+            .GET => .GET,
+            .POST => .POST,
+            .PUT => .PUT,
+            .DELETE => .DELETE,
+            .HEAD => .HEAD,
+            .PATCH => .PATCH,
+            else => error.UnsupportedMethod,
+        };
+    }
+
     /// Executes a single HTTP request and returns the response.
     pub fn execute(self: *HttpClient, request: *const httpfiles.HttpRequest) !HttpResponse {
-        if (request.method == null) {
-            return error.MissingHttpMethod;
+        const ca_bundle = try curl.allocCABundle(self.allocator);
+        defer ca_bundle.deinit();
+        const easy = try curl.Easy.init(.{
+            .ca_bundle = ca_bundle,
+        });
+        defer easy.deinit();
+
+        var writer = std.Io.Writer.Allocating.init(self.allocator);
+        defer writer.deinit();
+
+        var headers: std.ArrayList([]const u8) = .empty;
+        for (request.headers.items) |header| {
+            const s = try std.fmt.allocPrintSentinel(self.allocator, "{s}: {s}", .{ header.name, header.value }, 0);
+            try headers.append(self.allocator, s);
         }
 
-        const uri = try Uri.parse(request.url);
+        defer {
+            for (headers.items) |header| {
+                self.allocator.free(header);
+            }
+            headers.deinit(self.allocator);
+        }
 
-        var req = try self.client.request(request.method.?, uri, .{
-            .extra_headers = request.headers.items,
+        const url = try self.allocator.dupeZ(u8, request.url);
+        defer self.allocator.free(url);
+        const resp = try easy.fetch(url, .{
+            .method = try map_method_for_curl(request.method orelse return error.RequestMethodNotSet),
+            // TODO: Is it possible to remove the ptrCast?
+            .headers = @ptrCast(headers.items),
+            .writer = &writer.writer,
+            .body = request.body,
         });
 
-        defer req.deinit();
-
-        if (request.body) |body| {
-            req.transfer_encoding = .{ .content_length = body.len };
-        }
-
-        if (request.body) |body| {
-            var b = try req.sendBodyUnflushed(&.{});
-            try b.writer.writeAll(body);
-            try b.end();
-            try req.connection.?.flush();
-        } else {
-            try req.sendBodiless();
-        }
-
-        var raw_response = try req.receiveHead(&.{});
-
+        const resp_body = try self.allocator.dupe(u8, writer.writer.buffered());
         var response = HttpResponse.init(self.allocator);
-        response.status = raw_response.head.status;
+        response.status = @enumFromInt(resp.status_code);
 
-        var header_iterator = raw_response.head.iterateHeaders();
-        while (header_iterator.next()) |header| {
-            const name = try self.allocator.dupe(u8, header.name);
-            const value = try self.allocator.dupe(u8, header.value);
+        var header_iterator = try resp.iterateHeaders(.{});
+        while (try header_iterator.next()) |header| {
+            std.debug.print("{s}: {s}\n", .{ header.name, header.get() });
+            const n = try std.ascii.allocLowerString(self.allocator, header.name);
+            const name = try self.allocator.dupe(u8, n);
+            const value = try self.allocator.dupe(u8, header.get());
             try response.headers.put(name, value);
         }
 
-        const decompress_buffer: []u8 = switch (raw_response.head.content_encoding) {
-            .identity => &.{},
-            .zstd => try self.allocator.alloc(u8, std.compress.zstd.default_window_len),
-            .deflate, .gzip => try self.allocator.alloc(u8, std.compress.flate.max_window_len),
-            .compress => return error.UnsupportedCompressionMethod,
-        };
-        defer self.allocator.free(decompress_buffer);
-        var transfer_buffer: [64]u8 = undefined;
-        var decompress: http.Decompress = undefined;
-        const reader = raw_response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
-
-        // Optimal size depends on how you will use the reader.
-        response.body = try reader.allocRemaining(self.allocator, .unlimited);
+        response.body = resp_body;
         return response;
     }
 
