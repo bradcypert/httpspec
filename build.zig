@@ -5,7 +5,6 @@ pub fn build(b: *std.Build) void {
     const dependencies = [_][]const u8{
         "clap",
         "regex",
-        "curl",
     };
 
     const target = b.standardTargetOptions(.{});
@@ -23,9 +22,13 @@ pub fn build(b: *std.Build) void {
     });
 
     for (dependencies) |dependency| {
-        const dep = b.dependency(dependency, .{});
+        const dep = b.dependency(dependency, .{ .target = target, .optimize = optimize });
         exe.root_module.addImport(dependency, dep.module(dependency));
     }
+
+    // Deps that break the easy import flow
+    const d = b.dependency("curl", .{ .target = target, .optimize = optimize });
+    exe.root_module.addImport("curl", d.module("curl"));
 
     exe.linkLibC();
 

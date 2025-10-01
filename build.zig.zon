@@ -45,8 +45,8 @@
             .hash = "regex-0.1.2-axC350bnAQCyrPkH2IEfri8hebJO6IujGY1rhcgZBXpL",
         },
         .curl = .{
-            .url = "https://github.com/jiacai2050/zig-curl/archive/refs/tags/v0.3.1.zip",
-            .hash = "curl-0.3.1-P4tT4b_JAAC2bpWR1_NjsHTrg_Ufz2mmojU-e-y9k_99",
+            .url = "git+https://github.com/jiacai2050/zig-curl/?ref=HEAD#df369a2925a57446cb3147def4e11e6782452dbd",
+            .hash = "curl-0.3.1-P4tT4X_LAAB-rzh6tsg_j9OSokOCTt6pK4DxFUYUwC7K",
         },
     },
     .paths = .{
