@@ -18,8 +18,8 @@ jobs:
         with:
           version: 0.15.1
 
-      - name: Build Windows 
-        run: "zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSafe -Dexe_name=httpspec_windows_x86"
+      #- name: Build Windows 
+      #  run: "zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSafe -Dexe_name=httpspec_windows_x86"
 
       - name: Build Mac_x86 
         run: "zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe -Dexe_name=httpspec_mac_x86"
