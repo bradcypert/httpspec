@@ -5,6 +5,7 @@ pub fn build(b: *std.Build) void {
     const dependencies = [_][]const u8{
         "clap",
         "regex",
+        "curl",
     };
 
     const target = b.standardTargetOptions(.{});
@@ -22,9 +23,11 @@ pub fn build(b: *std.Build) void {
     });
 
     for (dependencies) |dependency| {
-        const dep = b.dependency(dependency, .{});
+        const dep = b.dependency(dependency, .{ .target = target, .optimize = optimize });
         exe.root_module.addImport(dependency, dep.module(dependency));
     }
+
+    exe.linkLibC();
 
     b.installArtifact(exe);
 
@@ -66,7 +69,7 @@ pub fn build(b: *std.Build) void {
 
         // Add dependencies to individual test artifacts
         for (dependencies) |dependency| {
-            const dep = b.dependency(dependency, .{});
+            const dep = b.dependency(dependency, .{ .target = target, .optimize = optimize });
             test_artifact.root_module.addImport(dependency, dep.module(dependency));
         }
 

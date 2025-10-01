@@ -44,6 +44,10 @@
             .url = "git+https://github.com/bradcypert/zig-regex.git#05f641c08939f131bb82195855efa7afaf7566eb",
             .hash = "regex-0.1.2-axC350bnAQCyrPkH2IEfri8hebJO6IujGY1rhcgZBXpL",
         },
+        .curl = .{
+            .url = "git+https://github.com/jiacai2050/zig-curl/?ref=HEAD#df369a2925a57446cb3147def4e11e6782452dbd",
+            .hash = "curl-0.3.1-P4tT4X_LAAB-rzh6tsg_j9OSokOCTt6pK4DxFUYUwC7K",
+        },
     },
     .paths = .{
         "build.zig",
