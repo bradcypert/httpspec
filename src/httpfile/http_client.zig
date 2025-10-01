@@ -105,8 +105,7 @@ pub const HttpClient = struct {
         var header_iterator = try resp.iterateHeaders(.{});
         while (try header_iterator.next()) |header| {
             std.debug.print("{s}: {s}\n", .{ header.name, header.get() });
-            const n = try std.ascii.allocLowerString(self.allocator, header.name);
-            const name = try self.allocator.dupe(u8, n);
+            const name = try std.ascii.allocLowerString(self.allocator, header.name);
             const value = try self.allocator.dupe(u8, header.get());
             try response.headers.put(name, value);
         }
