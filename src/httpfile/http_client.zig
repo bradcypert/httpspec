@@ -70,6 +70,7 @@ pub const HttpClient = struct {
         const easy = try curl.Easy.init(.{
             .ca_bundle = ca_bundle,
         });
+
         defer easy.deinit();
 
         var writer = std.Io.Writer.Allocating.init(self.allocator);
@@ -90,6 +91,20 @@ pub const HttpClient = struct {
 
         const url = try self.allocator.dupeZ(u8, request.url);
         defer self.allocator.free(url);
+        switch (request.version) {
+            .@"HTTP/1.0" => {
+                try easy.setHttpVersion(.http1_0);
+            },
+            .@"HTTP/1.1" => {
+                try easy.setHttpVersion(.http1_1);
+            },
+            .@"HTTP/2" => {
+                try easy.setHttpVersion(.http2);
+            },
+            .@"HTTP/3" => {
+                try easy.setHttpVersion(.http3);
+            },
+        }
         const resp = try easy.fetch(url, .{
             .method = try map_method_for_curl(request.method orelse return error.RequestMethodNotSet),
             // TODO: Is it possible to remove the ptrCast?

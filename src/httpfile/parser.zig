@@ -36,6 +36,13 @@ pub const Assertion = struct {
     assertion_type: AssertionType,
 };
 
+pub const HttpVersion = enum {
+    @"HTTP/1.0",
+    @"HTTP/1.1",
+    @"HTTP/2",
+    @"HTTP/3",
+};
+
 pub const HttpRequest = struct {
     // TODO: Null HTTP METHOD SHOULD NOT BE CRITICAL TO PROPERLY PARSING
     method: ?http.Method,
@@ -43,6 +50,7 @@ pub const HttpRequest = struct {
     headers: ArrayList(http.Header),
     body: ?[]u8,
     assertions: ArrayList(Assertion),
+    version: HttpVersion,
     // TODO: Add a name for the request if needed.
 
     pub fn init() HttpRequest {
@@ -52,6 +60,7 @@ pub const HttpRequest = struct {
             .headers = .empty,
             .body = null,
             .assertions = .empty,
+            .version = .@"HTTP/1.1",
         };
     }
 
@@ -136,8 +145,12 @@ pub fn parseContent(allocator: Allocator, content: []const u8) !ArrayList(HttpRe
             var tokens = std.mem.tokenizeScalar(u8, trimmed_line, ' ');
             const method_str = tokens.next() orelse return error.InvalidRequestMissingMethod;
             const url = tokens.next() orelse return error.InvalidRequestMissingURL;
+            const version = tokens.next();
             current_request.method = std.meta.stringToEnum(http.Method, method_str) orelse null;
             current_request.url = try allocator.dupe(u8, url);
+            if (version) |v| {
+                current_request.version = std.meta.stringToEnum(HttpVersion, v) orelse return error.InvalidHttpVersion;
+            }
             state = .headers;
             continue;
         }
@@ -171,7 +184,7 @@ pub fn parseContent(allocator: Allocator, content: []const u8) !ArrayList(HttpRe
 
 test "HttpParser from String Contents" {
     const test_http_contents =
-        \\GET https://api.example.com
+        \\GET https://api.example.com HTTP/3
         \\Accept: */*
         \\Authorization: Bearer ABC123
         \\
@@ -199,6 +212,7 @@ test "HttpParser from String Contents" {
     try std.testing.expectEqual(http.Method.POST, requests.items[1].method);
     try std.testing.expectEqualStrings("https://api.example.com", requests.items[0].url);
     try std.testing.expectEqualStrings("https://api.example.com/users", requests.items[1].url);
+    try std.testing.expectEqual(HttpVersion.@"HTTP/3", requests.items[0].version);
     try std.testing.expectEqualStrings("Authorization", requests.items[0].headers.items[1].name);
     try std.testing.expectEqualStrings("Bearer ABC123", requests.items[0].headers.items[1].value);
     try std.testing.expectEqualStrings("Authorization", requests.items[1].headers.items[1].name);

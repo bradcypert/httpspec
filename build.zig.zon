@@ -45,8 +45,8 @@
             .hash = "regex-0.1.2-axC350bnAQCyrPkH2IEfri8hebJO6IujGY1rhcgZBXpL",
         },
         .curl = .{
-            .url = "git+https://github.com/jiacai2050/zig-curl/?ref=HEAD#df369a2925a57446cb3147def4e11e6782452dbd",
-            .hash = "curl-0.3.1-P4tT4X_LAAB-rzh6tsg_j9OSokOCTt6pK4DxFUYUwC7K",
+            .url = "git+https://github.com/jiacai2050/zig-curl/?ref=HEAD#1a23d311582c1e72bdb9ec3020f82b8e2a4b8c8a",
+            .hash = "curl-0.3.1-P4tT4cPNAAAZsLz5AsgitsBp3W0uVpoFT7IeNX2qOQlP",
         },
     },
     .paths = .{
