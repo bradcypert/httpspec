@@ -93,16 +93,16 @@ pub const HttpClient = struct {
         defer self.allocator.free(url);
         switch (request.version) {
             .@"HTTP/1.0" => {
-                easy.setHttpVersion(.http1_0);
+                try easy.setHttpVersion(.http1_0);
             },
             .@"HTTP/1.1" => {
-                easy.setHttpVersion(.http1_1);
+                try easy.setHttpVersion(.http1_1);
             },
             .@"HTTP/2" => {
-                easy.setHttpVersion(.http2);
+                try easy.setHttpVersion(.http2);
             },
             .@"HTTP/3" => {
-                easy.setHttpVersion(.http3);
+                try easy.setHttpVersion(.http3);
             },
         }
         const resp = try easy.fetch(url, .{
