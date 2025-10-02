@@ -327,6 +327,7 @@ test "Assertion checker with diagnostics - all pass" {
         .headers = .empty,
         .assertions = assertions,
         .body = null,
+        .version = .@"HTTP/1.1",
     };
 
     var response_headers = std.StringHashMap([]const u8).init(allocator);
@@ -381,6 +382,7 @@ test "Assertion checker with not_equal - all pass" {
         .headers = .empty,
         .assertions = assertions,
         .body = null,
+        .version = .@"HTTP/1.1",
     };
 
     var response_headers = std.StringHashMap([]const u8).init(allocator);
@@ -435,6 +437,7 @@ test "Assertion checker with failures - collects all failures" {
         .headers = .empty,
         .assertions = assertions,
         .body = null,
+        .version = .@"HTTP/1.1",
     };
 
     var response_headers = std.StringHashMap([]const u8).init(allocator);
@@ -493,6 +496,7 @@ test "HttpParser supports starts_with for status, body, and header" {
         .headers = .empty,
         .assertions = assertions,
         .body = null,
+        .version = .@"HTTP/1.1",
     };
 
     var response_headers = std.StringHashMap([]const u8).init(allocator);
@@ -556,6 +560,7 @@ test "HttpParser supports matches_regex and not_matches_regex for status, body, 
         .headers = .empty,
         .assertions = assertions,
         .body = null,
+        .version = .@"HTTP/1.1",
     };
 
     var response_headers = std.StringHashMap([]const u8).init(allocator);
@@ -605,6 +610,7 @@ test "HttpParser supports contains and not_contains for headers" {
         .headers = .empty,
         .assertions = assertions,
         .body = null,
+        .version = .@"HTTP/1.1",
     };
 
     var response_headers = std.StringHashMap([]const u8).init(allocator);
