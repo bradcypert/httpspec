@@ -16,18 +16,18 @@ jobs:
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.1
+          version: 0.15.2
 
-      - name: Build Windows 
+      - name: Build Windows
         run: "zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSafe -Dexe_name=httpspec_windows_x86"
 
-      - name: Build Mac_x86 
+      - name: Build Mac_x86
         run: "zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe -Dexe_name=httpspec_mac_x86"
 
-      - name: Build Mac_ARM 
+      - name: Build Mac_ARM
         run: "zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe -Dexe_name=httpspec_mac_arm"
 
-      - name: Build Linux_x86 
+      - name: Build Linux_x86
         run: "zig build -Dtarget=x86_64-linux -Doptimize=ReleaseSafe -Dexe_name=httpspec_linux_x86"
 
       - name: Build Linux_ARM
@@ -50,4 +50,3 @@ jobs:
             ./zig-out/bin/httpspec_linux_arm
             ./zig-out/bin/checksums.txt
             LICENSE
-

@@ -51,7 +51,7 @@ pub const HttpRequest = struct {
     body: ?[]u8,
     assertions: ArrayList(Assertion),
     version: HttpVersion,
-    // TODO: Add a name for the request if needed.
+    name: ?[]const u8,
 
     pub fn init() HttpRequest {
         return .{
@@ -61,6 +61,7 @@ pub const HttpRequest = struct {
             .body = null,
             .assertions = .empty,
             .version = .@"HTTP/1.1",
+            .name = null,
         };
     }
 
@@ -78,6 +79,9 @@ pub const HttpRequest = struct {
         self.headers.deinit(allocator);
         if (self.body) |body| {
             if (body.len > 0) allocator.free(body);
+        }
+        if (self.name) |name| {
+            allocator.free(name);
         }
     }
 };
@@ -118,6 +122,8 @@ pub fn parseContent(allocator: Allocator, content: []const u8) !ArrayList(HttpRe
                 }
                 try requests.append(allocator, current_request);
                 current_request = HttpRequest.init();
+                const name = try allocator.dupe(u8, std.mem.trim(u8, trimmed_line[3..], &std.ascii.whitespace));
+                current_request.name = name;
                 state = null;
             }
             continue;
@@ -188,7 +194,7 @@ test "HttpParser from String Contents" {
         \\Accept: */*
         \\Authorization: Bearer ABC123
         \\
-        \\###
+        \\### TEST NAME
         \\
         \\POST https://api.example.com/users
         \\Accept: */*
@@ -217,6 +223,7 @@ test "HttpParser from String Contents" {
     try std.testing.expectEqualStrings("Bearer ABC123", requests.items[0].headers.items[1].value);
     try std.testing.expectEqualStrings("Authorization", requests.items[1].headers.items[1].name);
     try std.testing.expectEqualStrings("Bearer ABC123", requests.items[1].headers.items[1].value);
+    try std.testing.expectEqualStrings("TEST NAME", requests.items[1].name orelse "");
     try std.testing.expectEqual(0, (requests.items[0].body orelse "").len);
     try std.testing.expect(0 != (requests.items[1].body orelse "").len);
 }
