@@ -37,16 +37,16 @@
     // internet connectivity.
     .dependencies = .{
         .clap = .{
-            .url = "git+https://github.com/Hejsil/zig-clap#5289e0753cd274d65344bef1c114284c633536ea",
-            .hash = "clap-0.11.0-oBajB-HnAQDPCKYzwF7rO3qDFwRcD39Q0DALlTSz5H7e",
+            .url = "git+https://github.com/Hejsil/zig-clap?ref=HEAD#8d97efa1ee1e575443c7888d5c38e1c3fc145cf5",
+            .hash = "clap-0.12.0-oBajB7foAQDqlSwaSG5g0yq7xGbQARUsBk5T64gAOqP5",
         },
         .regex = .{
-            .url = "git+https://github.com/bradcypert/zig-regex.git#05f641c08939f131bb82195855efa7afaf7566eb",
-            .hash = "regex-0.1.2-axC350bnAQCyrPkH2IEfri8hebJO6IujGY1rhcgZBXpL",
+            .url = "git+https://github.com/tiehuis/zig-regex?ref=HEAD#49c5694c8b3ee4ae4a7131035a44a69841ef4740",
+            .hash = "regex-0.1.3-axC357jaAQBRENglwG9NTcuej8pYz1IZmfwER_AXMlHZ",
         },
         .curl = .{
-            .url = "git+https://github.com/jiacai2050/zig-curl/?ref=HEAD#1a23d311582c1e72bdb9ec3020f82b8e2a4b8c8a",
-            .hash = "curl-0.3.1-P4tT4cPNAAAZsLz5AsgitsBp3W0uVpoFT7IeNX2qOQlP",
+            .url = "git+https://github.com/jiacai2050/zig-curl?ref=HEAD#f701e602d962e149338521e9848528a372c05966",
+            .hash = "curl-0.5.1-P4tT4VsCAQBQ_kA6SBylS7sDyKXdcnuv-13p21ZNx8Az",
         },
     },
     .paths = .{

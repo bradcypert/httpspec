@@ -40,10 +40,10 @@ pub const HttpClient = struct {
     allocator: Allocator,
     client: http.Client,
 
-    pub fn init(allocator: Allocator) HttpClient {
+    pub fn init(io: std.Io, allocator: Allocator) HttpClient {
         return .{
             .allocator = allocator,
-            .client = http.Client{ .allocator = allocator },
+            .client = http.Client{ .allocator = allocator, .io = io },
         };
     }
 
@@ -65,9 +65,9 @@ pub const HttpClient = struct {
 
     /// Executes a single HTTP request and returns the response.
     pub fn execute(self: *HttpClient, request: *const httpfiles.HttpRequest) !HttpResponse {
-        const ca_bundle = try curl.allocCABundle(self.allocator);
-        defer ca_bundle.deinit();
-        const easy = try curl.Easy.init(.{
+        var ca_bundle = try curl.allocCABundle(self.allocator, self.client.io);
+        defer ca_bundle.deinit(self.allocator);
+        var easy = try curl.Easy.init(.{
             .ca_bundle = ca_bundle,
         });
 

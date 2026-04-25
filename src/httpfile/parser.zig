@@ -86,10 +86,12 @@ pub const HttpRequest = struct {
     }
 };
 
-pub fn parseFile(allocator: Allocator, file_path: []const u8) !ArrayList(HttpRequest) {
-    const file = try std.fs.cwd().openFile(file_path, .{});
-    defer file.close();
-    const file_content = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
+pub fn parseFile(io: std.Io, allocator: Allocator, file_path: []const u8) !ArrayList(HttpRequest) {
+    const cwd = std.Io.Dir.cwd();
+    const file = try cwd.openFile(io, file_path, .{});
+    defer file.close(io);
+    var file_reader = file.reader(io, &.{});
+    const file_content = try file_reader.interface.allocRemaining(allocator, std.Io.Limit.unlimited);
     defer allocator.free(file_content);
     return try parseContent(allocator, file_content);
 }

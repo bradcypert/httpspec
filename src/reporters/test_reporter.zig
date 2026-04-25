@@ -5,7 +5,7 @@ pub const BasicReporter = struct {
     test_pass: usize,
     test_fail: usize,
     test_invalid: usize,
-    m: std.Thread.Mutex,
+    m: std.Io.Mutex,
 
     pub fn init() BasicReporter {
         return .{
@@ -13,7 +13,7 @@ pub const BasicReporter = struct {
             .test_pass = 0,
             .test_fail = 0,
             .test_invalid = 0,
-            .m = std.Thread.Mutex{},
+            .m = .init,
         };
     }
 
@@ -31,24 +31,24 @@ pub const BasicReporter = struct {
         };
     }
 
-    pub fn incTestCount(self: *BasicReporter) void {
-        self.m.lock();
-        defer self.m.unlock();
+    pub fn incTestCount(self: *BasicReporter, io: std.Io) !void {
+        try self.m.lock(io);
+        defer self.m.unlock(io);
         self.test_count += 1;
     }
-    pub fn incTestPass(self: *BasicReporter) void {
-        self.m.lock();
-        defer self.m.unlock();
+    pub fn incTestPass(self: *BasicReporter, io: std.Io) !void {
+        try self.m.lock(io);
+        defer self.m.unlock(io);
         self.test_pass += 1;
     }
-    pub fn incTestFail(self: *BasicReporter) void {
-        self.m.lock();
-        defer self.m.unlock();
+    pub fn incTestFail(self: *BasicReporter, io: std.Io) !void {
+        try self.m.lock(io);
+        defer self.m.unlock(io);
         self.test_fail += 1;
     }
-    pub fn incTestInvalid(self: *BasicReporter) void {
-        self.m.lock();
-        defer self.m.unlock();
+    pub fn incTestInvalid(self: *BasicReporter, io: std.Io) !void {
+        try self.m.lock(io);
+        defer self.m.unlock(io);
         self.test_invalid += 1;
     }
 };

@@ -15,19 +15,19 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
 
     const exe = b.addExecutable(.{
         .name = exe_name,
         .root_module = exe_mod,
+        .use_llvm = true,
     });
 
     for (dependencies) |dependency| {
         const dep = b.dependency(dependency, .{ .target = target, .optimize = optimize });
         exe.root_module.addImport(dependency, dep.module(dependency));
     }
-
-    exe.linkLibC();
 
     b.installArtifact(exe);
 
@@ -85,10 +85,13 @@ pub fn build(b: *std.Build) void {
 }
 
 fn findZigFiles(b: *std.Build, files: *std.ArrayList([]const u8), dir_path: []const u8) !void {
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
-    defer dir.close();
+    var threaded = std.Io.Threaded.init_single_threaded;
+    const io = threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    var dir = try std.Io.Dir.openDir(cwd, io, dir_path, .{ .iterate = true });
+    defer dir.close(io);
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
             const full_path = try std.fs.path.join(b.allocator, &[_][]const u8{ dir_path, entry.name });
             try files.append(b.allocator, full_path);

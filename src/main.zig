@@ -6,24 +6,19 @@ const Client = @import("./httpfile/http_client.zig");
 const AssertionChecker = @import("./httpfile/assertion_checker.zig");
 const TestReporter = @import("./reporters/test_reporter.zig");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     // Use a debug allocator for leak detection.
-    var debug = std.heap.DebugAllocator(.{}){};
-    defer _ = debug.deinit();
-    const allocator = debug.allocator();
+    const allocator = init.gpa;
 
     var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
     const stdout = &stdout_writer.interface;
     defer stdout.flush() catch {};
 
     var stderr_buffer: [1024]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    var stderr_writer = std.Io.File.stderr().writer(init.io, &stderr_buffer);
     const stderr = &stderr_writer.interface;
     defer stderr.flush() catch {};
-
-    // Determine thread count from environment.
-    const threads = std.process.parseEnvVarInt("HTTP_THREAD_COUNT", usize, 10) catch 1;
 
     // Parse CLI arguments.
     const params = comptime clap.parseParamsComptime(
@@ -31,7 +26,7 @@ pub fn main() !void {
         \\<str>...              Executes the HTTP specs in the provided files (if omitted, all files in subdirectories will be ran instead)
     );
     var diag = clap.Diagnostic{};
-    var res = clap.parse(clap.Help, &params, clap.parsers.default, .{
+    var res = clap.parse(clap.Help, &params, clap.parsers.default, init.minimal.args, .{
         .diagnostic = &diag,
         .allocator = allocator,
     }) catch |err| {
@@ -51,24 +46,18 @@ pub fn main() !void {
         for (files.items) |file| allocator.free(file);
         files.deinit(allocator);
     }
-    try collectSpecFiles(allocator, &files, res);
+    try collectSpecFiles(init.io, allocator, &files, res);
 
-    // Set up thread pool and reporter.
-    var pool: std.Thread.Pool = undefined;
-    try pool.init(.{
-        .allocator = allocator,
-        .n_jobs = threads,
-    });
-    defer pool.deinit();
+    var group: std.Io.Group = .init;
+    errdefer group.cancel(init.io);
 
-    var wg: std.Thread.WaitGroup = .{};
     var reporter = TestReporter.BasicReporter.init();
 
     // Run all tests in parallel.
     for (files.items) |path| {
-        pool.spawnWg(&wg, runTest, .{ allocator, &reporter, path, stderr });
+        group.async(init.io, runTest, .{ init.io, allocator, &reporter, path, stderr });
     }
-    wg.wait();
+    try group.await(init.io);
 
     // Print summary.
     reporter.report(stdout);
@@ -76,13 +65,14 @@ pub fn main() !void {
 
 /// Collects all HTTP spec files to run, based on CLI args.
 fn collectSpecFiles(
+    io: std.Io,
     allocator: std.mem.Allocator,
     files: *std.ArrayList([]const u8),
     res: anytype,
 ) !void {
     if (res.positionals[0].len == 0) {
         // No args: find all .http/.httpspec files recursively from cwd.
-        const http_files = try listHttpFiles(allocator, ".");
+        const http_files = try listHttpFiles(io, allocator, ".");
         defer allocator.free(http_files);
         for (http_files) |file| try files.append(allocator, file);
     } else {
@@ -93,9 +83,10 @@ fn collectSpecFiles(
             {
                 try files.append(allocator, try allocator.dupe(u8, pos));
             } else {
-                const file_info = try std.fs.cwd().statFile(pos);
+                const cwd = std.Io.Dir.cwd();
+                const file_info = try cwd.statFile(io, pos, .{});
                 if (file_info.kind != .directory) return error.InvalidPositionalArgument;
-                const http_files = try listHttpFiles(allocator, pos);
+                const http_files = try listHttpFiles(io, allocator, pos);
                 defer allocator.free(http_files);
                 for (http_files) |file| try files.append(allocator, file);
             }
@@ -105,38 +96,39 @@ fn collectSpecFiles(
 
 /// Runs all requests in a spec file and updates the reporter.
 fn runTest(
+    io: std.Io,
     base_allocator: std.mem.Allocator,
     reporter: *TestReporter.BasicReporter,
     path: []const u8,
-    stderr: *std.io.Writer,
-) void {
+    stderr: *std.Io.Writer,
+) !void {
     // Create arena allocator for this test to provide memory isolation
     var arena = std.heap.ArenaAllocator.init(base_allocator);
     defer arena.deinit(); // Automatically frees all test allocations
     const allocator = arena.allocator();
 
     var has_failure = false;
-    reporter.incTestCount();
+    try reporter.incTestCount(io);
 
-    var items = HttpParser.parseFile(allocator, path) catch |err| {
-        reporter.incTestInvalid();
+    var items = HttpParser.parseFile(io, allocator, path) catch |err| {
+        try reporter.incTestInvalid(io);
         std.debug.print("Failed to parse file {s}: {s}\n", .{ path, @errorName(err) });
         return;
     };
     const owned_items = items.toOwnedSlice(allocator) catch |err| {
-        reporter.incTestInvalid();
+        try reporter.incTestInvalid(io);
         std.debug.print("Failed to convert items to owned slice in file {s}: {s}\n", .{ path, @errorName(err) });
         return;
     };
     // Note: No need to manually free owned_items since arena will handle it
 
-    var client = Client.HttpClient.init(allocator);
+    var client = Client.HttpClient.init(io, allocator);
     defer client.deinit();
 
     for (owned_items) |*owned_item| {
         // Note: No need to manually deinit owned_item since arena will handle it
         var responses = client.execute(owned_item) catch |err| {
-            reporter.incTestInvalid();
+            try reporter.incTestInvalid(io);
             std.debug.print("Failed to execute request in file {s}: {s}\n", .{ path, @errorName(err) });
             return;
         };
@@ -151,33 +143,34 @@ fn runTest(
         }
     }
     if (!has_failure) {
-        reporter.incTestPass();
+        try reporter.incTestPass(io);
     } else {
-        reporter.incTestFail();
+        try reporter.incTestFail(io);
     }
 }
 
 /// Recursively finds all .http/.httpspec files in a directory.
-fn listHttpFiles(allocator: std.mem.Allocator, dir: []const u8) ![][]const u8 {
+fn listHttpFiles(io: std.Io, allocator: std.mem.Allocator, dir_path: []const u8) ![][]const u8 {
     var files: std.ArrayList([]const u8) = .empty;
     defer files.deinit(allocator);
 
-    var dir_entry = try std.fs.cwd().openDir(dir, .{ .iterate = true });
-    defer dir_entry.close();
+    const cwd = std.Io.Dir.cwd();
+    var dir_entry = try std.Io.Dir.openDir(cwd, io, dir_path, .{ .iterate = true });
+    defer dir_entry.close(io);
 
     var it = dir_entry.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.kind == .directory) {
             if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) continue;
-            const subdir = try std.fs.path.join(allocator, &[_][]const u8{ dir, entry.name });
+            const subdir = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
             defer allocator.free(subdir);
-            const sub_files = try listHttpFiles(allocator, subdir);
+            const sub_files = try listHttpFiles(io, allocator, subdir);
             defer allocator.free(sub_files);
             for (sub_files) |file| try files.append(allocator, file);
         } else if (std.mem.eql(u8, std.fs.path.extension(entry.name), ".http") or
             std.mem.eql(u8, std.fs.path.extension(entry.name), ".httpspec"))
         {
-            const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir, entry.name });
+            const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
             try files.append(allocator, file_path);
         }
     }

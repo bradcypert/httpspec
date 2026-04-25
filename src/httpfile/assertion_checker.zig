@@ -189,7 +189,7 @@ fn checkAssertion(
         .equal => {
             if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
                 const assert_status_code = try std.fmt.parseInt(u16, assertion.value, 10);
-                const expected_status = try std.meta.intToEnum(http.Status, assert_status_code);
+                const expected_status = std.enums.fromInt(http.Status, assert_status_code) orelse return error.UnsupportedStatusCode;
                 if (response.status != expected_status) {
                     const actual_str = try std.fmt.allocPrint(diagnostic.allocator, "{d}", .{@intFromEnum(response.status.?)});
                     defer diagnostic.allocator.free(actual_str);
@@ -214,7 +214,7 @@ fn checkAssertion(
         .not_equal => {
             if (std.ascii.eqlIgnoreCase(assertion.key, "status")) {
                 const assert_status_code = try std.fmt.parseInt(u16, assertion.value, 10);
-                const expected_status = try std.meta.intToEnum(http.Status, assert_status_code);
+                const expected_status = std.enums.fromInt(http.Status, assert_status_code) orelse return error.UnsupportedStatusCode;
                 if (response.status == expected_status) {
                     const actual_str = try std.fmt.allocPrint(diagnostic.allocator, "{d}", .{@intFromEnum(response.status.?)});
                     defer diagnostic.allocator.free(actual_str);
