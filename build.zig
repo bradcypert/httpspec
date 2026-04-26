@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
 
     const exe_unit_tests = b.addTest(.{
         .root_module = exe_mod,
+        .use_llvm = true,
     });
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
@@ -64,7 +65,9 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path(zig_file),
                 .target = target,
                 .optimize = optimize,
+                .link_libc = true,
             }),
+            .use_llvm = true,
         });
 
         // Add dependencies to individual test artifacts

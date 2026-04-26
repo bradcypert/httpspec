@@ -159,7 +159,7 @@ pub fn printResponse(response: *const HttpResponse) void {
 test "HttpClient basic functionality" {
     const allocator = std.testing.allocator;
 
-    var client = HttpClient.init(allocator);
+    var client = HttpClient.init(std.testing.io, allocator);
     defer client.deinit();
 
     var request = httpfiles.HttpRequest.init();

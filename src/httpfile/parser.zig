@@ -225,9 +225,9 @@ test "HttpParser from String Contents" {
     try std.testing.expectEqualStrings("Bearer ABC123", requests.items[0].headers.items[1].value);
     try std.testing.expectEqualStrings("Authorization", requests.items[1].headers.items[1].name);
     try std.testing.expectEqualStrings("Bearer ABC123", requests.items[1].headers.items[1].value);
-    try std.testing.expectEqualStrings("TEST NAME", requests.items[1].name orelse "");
-    try std.testing.expectEqual(0, (requests.items[0].body orelse "").len);
-    try std.testing.expect(0 != (requests.items[1].body orelse "").len);
+    try std.testing.expectEqualStrings("TEST NAME", requests.items[1].name orelse unreachable);
+    try std.testing.expectEqual(null, requests.items[0].body);
+    try std.testing.expect(0 != (requests.items[1].body orelse unreachable).len);
 }
 
 test "HttpParser parses assertions" {
@@ -252,5 +252,5 @@ test "HttpParser parses assertions" {
     try std.testing.expectEqualStrings("status", requests.items[0].assertions.items[0].key);
     try std.testing.expectEqual(AssertionType.equal, requests.items[0].assertions.items[0].assertion_type);
     try std.testing.expectEqualStrings("200", requests.items[0].assertions.items[0].value);
-    try std.testing.expectEqual(0, (requests.items[0].body orelse "").len);
+    try std.testing.expectEqual(null, requests.items[0].body);
 }
